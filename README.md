@@ -1,148 +1,118 @@
 # Tele2Rub
 
-Automatically transfer videos from a Telegram bot to your Rubika Saved Messages.
+Send a video to a Telegram bot and have it uploaded to your Rubika Saved Messages.
 
-This project receives videos in Telegram, downloads them locally, places them in a queue, and then uploads them to Rubika through a separate worker process. The queue-based design helps keep transfers stable and avoids overlapping jobs.
+Tele2Rub uses a simple queue-based flow:
 
-## Inspiration
-
-This project was inspired by [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub).
+1. The Telegram bot receives a video in a private chat.
+2. The file is downloaded into `downloads/`.
+3. A task is added to `queue/tasks.jsonl`.
+4. The Rubika worker uploads the file.
+5. The Telegram status message is updated during the whole transfer.
 
 ## Features
 
-- Accepts videos from a Telegram bot in private chat
-- Queues jobs before uploading to Rubika
-- Supports video inputs
-- Shows step-by-step status updates in Telegram
-- Displays download progress during Telegram download
-- Shows upload percentage progress, status updates, and retry attempts for temporary failures
-- Supports canceling a job with `/cancel`
-- Sends videos to Rubika Saved Messages
-- Keeps video filenames and extensions during upload
+- Accepts video messages in Telegram private chat
+- Keeps a local upload queue to avoid overlapping jobs
+- Shows live download and upload progress
+- Supports upload retries for temporary Rubika errors
+- Supports canceling active or queued transfers
+- Supports retrying failed transfers when the downloaded file still exists
+- Provides quick action buttons for status, transfers, cleanup, cancel, and retry
+- Uploads videos to Rubika Saved Messages with their original filename
 
-## How It Works
+## Bot Controls
 
-The application runs two processes:
+Main menu buttons:
 
-- `telebot.py`: receives videos from Telegram, downloads them, and appends jobs to the queue
-- `rub.py`: reads queued jobs and uploads them to Rubika
-
-Flow overview:
-
-1. A user sends a video to the Telegram bot.
-2. The bot downloads the video into the local `downloads/` directory.
-3. A task is written to `queue/tasks.jsonl`.
-4. The Rubika worker picks up the task.
-5. The worker uploads the video to Rubika Saved Messages.
-6. The status message in Telegram is updated during the process.
-
-## Status Updates
-
-Each transfer gets a Telegram status message that is updated as the task moves through the pipeline.
-
-Current status coverage includes:
-
-- Download preparation
-- Download in progress
-- Download completed
-- Waiting in upload queue
-- Upload starting
-- Upload progress in percent
-- Upload retry attempts for transient errors
-- Canceled
-- Completed successfully
-- Failed after retries
-
-## Bot Menu
-
-The Telegram bot exposes a slash-command menu and a persistent button menu.
+- `📊 Status`
+- `📋 Transfers`
+- `🧹 Cleanup`
+- `🛑 Cancel`
 
 Available commands:
 
-- `/start`: open the main menu
-- `/status`: show active downloads, active upload, queue size, and downloads folder size
-- `/transfers`: list active and queued transfers with task IDs
-- `/retry <task_id>`: requeue a failed transfer if the downloaded file still exists
-- `/cleanup`: preview safe cleanup candidates in `downloads/`
-- `/cleanup confirm`: delete files in `downloads/` that are not active, queued, or processing
-- `/cancel`: show clickable buttons for active transfers
-- `/cancel <task_id>`: cancel a specific transfer
+- `/start` - open the main menu
+- `/status` - show active downloads, active upload, queue, failed count, and local storage usage
+- `/transfers` - show current downloads, current upload, queued items, and retryable failed transfers
+- `/cleanup` - preview removable files in `downloads/`
+- `/cleanup confirm` - delete safe cleanup candidates
+- `/cancel` - show clickable cancel buttons for active jobs
+- `/cancel <task_id>` - cancel a specific task
+- `/retry <task_id>` - requeue a failed task if its local file still exists
+
+Transfer message buttons:
+
+- `🛑 Cancel` on active and queued transfers
+- `🔁 Retry` on failed transfers
 
 ## Retry Policy
 
-Rubika uploads automatically retry on temporary errors.
+Rubika uploads retry automatically on temporary errors.
 
-- Maximum retries: `5`
+- Max attempts: `5`
 - Base retry delay: `3` seconds
-- Backoff behavior: delay increases by attempt number (`3s`, `6s`, `9s`, ...)
+- Backoff: `3s`, `6s`, `9s`, `12s`, `15s`
 
-Transient upload errors currently include cases such as:
+If all retries fail, the task is written to `queue/failed.jsonl` and the local downloaded file is kept for inspection or retry.
 
-- `502`
-- `bad gateway`
-- `timeout`
-- `cannot connect`
-- `connection reset`
-- `temporarily unavailable`
-- `error uploading chunk`
+## Cancellation
 
-If all retry attempts fail, the task is logged to `queue/failed.jsonl`.
+You can cancel a transfer in three ways:
 
-## Canceling a Job
+- tap a `🛑 Cancel` button on the transfer message
+- run `/cancel` and choose a task from the buttons
+- run `/cancel <task_id>`
 
-You can cancel a transfer in either of these ways:
+Behavior:
 
-- Run `/cancel` and choose an active transfer from the buttons
-- Reply to the status message with `/cancel`
-- Run `/cancel <task_id>`
+- Telegram download: stops as soon as possible
+- Upload queue: removed immediately
+- Rubika upload: stops at the next safe checkpoint
 
-Cancellation behavior:
+## Storage
 
-- If the file is still downloading from Telegram, the bot will stop it as soon as possible
-- If the job is still queued, it is removed from the queue immediately
-- If the worker is already uploading, cancellation is honored at the next safe check point, including between retries
+Runtime files:
 
-## Temporary Files and Cleanup
-
-Runtime files are created on demand:
-
-- `downloads/`: temporary downloaded files
-- `queue/tasks.jsonl`: pending jobs
-- `queue/processing.json`: currently active job
-- `queue/failed.jsonl`: failed jobs log
-- `queue/cancelled/`: cancellation markers
+- `downloads/` - temporary downloaded videos
+- `queue/tasks.jsonl` - pending jobs
+- `queue/processing.json` - the job currently being uploaded
+- `queue/failed.jsonl` - failed jobs log
+- `queue/cancelled/` - cancellation markers
 
 Cleanup behavior:
 
-- Successful upload: temporary file is deleted
-- Canceled job: temporary file is deleted
-- Failed upload after all retries: temporary file is kept for inspection or manual retry
+- successful upload: local file is deleted
+- canceled task: local file is deleted
+- failed upload: local file is kept
+
+If `queue/processing.json` was emptied manually, use this valid default:
+
+```json
+{}
+```
+
+Or simply delete the file and let the app recreate it when needed.
 
 ## Requirements
 
 - Python 3.9+
-- A Telegram bot token
-- Telegram `API_ID` and `API_HASH`
-- A valid Rubika session for `rubpy`
+- Telegram `API_ID`
+- Telegram `API_HASH`
+- Telegram bot token
+- Valid Rubika session support through `rubpy`
 
 ## Installation
-
-Clone the repository:
 
 ```bash
 git clone https://github.com/rezaaa/Tele2Rub.git
 cd Tele2Rub
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
 ## Configuration
 
-Create a `.env` file in the project root:
+Create `.env` in the project root:
 
 ```env
 API_ID=your_telegram_api_id
@@ -153,71 +123,21 @@ RUBIKA_SESSION=rubsession
 
 Variables:
 
-- `API_ID`: Telegram API ID from https://my.telegram.org
-- `API_HASH`: Telegram API hash from https://my.telegram.org
-- `BOT_TOKEN`: Bot token from BotFather
-- `RUBIKA_SESSION`: session name or session path used by `rubpy`
-
-## Setup Steps
-
-Before the bot can work, you need to prepare both Telegram and Rubika access.
-
-### 1. Get Telegram API Credentials
-
-Go to https://my.telegram.org and sign in with your Telegram account.
-
-Then:
-
-1. Open **API Development Tools**
-2. Create a new application
-3. Copy your `API_ID`
-4. Copy your `API_HASH`
-
-Put both values into `.env`.
-
-### 2. Create a Telegram Bot
-
-Open Telegram and talk to **@BotFather**.
-
-Then:
-
-1. Run `/newbot`
-2. Choose a bot name
-3. Choose a bot username
-4. Copy the bot token that BotFather gives you
-
-Put that token into `.env` as `BOT_TOKEN`.
-
-### 3. Prepare the Rubika Session
-
-Set a session name in `.env`, for example:
-
-```env
-RUBIKA_SESSION=rubsession
-```
-
-On the first run, the Rubika worker will ask for:
-
-1. Your Rubika phone number
-2. The OTP / verification code sent to that number
-
-After a successful login, the session is saved locally and reused on the next runs, so you usually only need to enter the phone number and OTP once.
+- `API_ID` - from https://my.telegram.org
+- `API_HASH` - from https://my.telegram.org
+- `BOT_TOKEN` - from BotFather
+- `RUBIKA_SESSION` - session name or path used by `rubpy`
 
 ## First Run
 
-On the first run, the Rubika worker may ask you to log in and confirm the session.
+On the first worker run, Rubika login may ask for:
 
-Typical first-run flow:
+1. Your phone number
+2. The OTP code sent by Rubika
 
-1. Start the project
-2. Enter your Rubika phone number when prompted
-3. Enter the OTP / verification code
-4. Wait for the session file to be created
-5. Reuse that saved session on future runs
+After that, the saved session is reused.
 
-After that, the session is reused for later runs.
-
-## Run the Project
+## Run
 
 Start both processes with:
 
@@ -225,60 +145,33 @@ Start both processes with:
 python3 main.py
 ```
 
-This launches:
+This starts:
 
-- the Telegram bot process
-- the Rubika worker process
+- `telebot.py` - Telegram receiver and downloader
+- `rub.py` - Rubika upload worker
 
 ## Run with Screen
 
-If you run the project on a server, `screen` is a simple way to keep it running after you disconnect.
-
-Start a new `screen` session:
-
 ```bash
 screen -S tele2rub
-```
-
-Inside the session, start the project:
-
-```bash
 cd /opt/Tele2Rub
 source venv/bin/activate
 python main.py
 ```
 
-Detach from the session without stopping the bot:
+Detach without stopping the app:
 
 ```text
 Ctrl + A, then D
 ```
 
-List active screen sessions:
+Useful commands:
 
-```bash
-screen -ls
-```
+- `screen -ls`
+- `screen -r tele2rub`
+- `screen -S tele2rub -X quit`
 
-Reattach to the running bot:
-
-```bash
-screen -r tele2rub
-```
-
-If `screen` asks for an exact session because multiple `tele2rub` sessions exist, use the full session id from `screen -ls`, for example:
-
-```bash
-screen -r 120682.tele2rub
-```
-
-Stop a running session:
-
-```bash
-screen -S tele2rub -X quit
-```
-
-If you have multiple old sessions and want to stop all of them:
+If multiple old sessions exist:
 
 ```bash
 for s in $(screen -ls | awk '/tele2rub/ {print $1}'); do
@@ -286,9 +179,9 @@ for s in $(screen -ls | awk '/tele2rub/ {print $1}'); do
 done
 ```
 
-## Update on a Server with Screen
+## Update on Server
 
-For a typical server setup using `/opt/Tele2Rub` and a virtual environment:
+Typical restart flow:
 
 ```bash
 cd /opt/Tele2Rub
@@ -303,66 +196,35 @@ done
 screen -dmS tele2rub bash -lc 'cd /opt/Tele2Rub && source venv/bin/activate && python main.py'
 ```
 
-After restarting, verify that one clean session is running:
+Then verify:
 
 ```bash
 screen -ls
 ```
 
-## Supported Telegram Inputs
+## Project Files
 
-The bot currently accepts these Telegram message types:
-
-- Video
-
-## Project Structure
-
-```text
-.
-├── main.py
-├── telebot.py
-├── rub.py
-├── task_store.py
-├── requirements.txt
-└── README.md
-```
-
-Important files:
-
-- `main.py`: starts both worker processes
-- `telebot.py`: Telegram bot logic, download flow, status updates, cancel command
-- `rub.py`: Rubika upload worker, retry handling, cleanup
-- `task_store.py`: shared queue, processing, failure, and cancellation helpers
-
-## Queue Storage
-
-This project uses simple JSON-based files instead of a database.
-
-- `queue/tasks.jsonl` stores pending jobs
-- `queue/processing.json` stores the job currently being processed
-- `queue/failed.jsonl` stores failed jobs and their error messages
-
-This makes the system easy to inspect and debug manually.
-
-## Notes
-
-- Videos are uploaded to Rubika with their original filenames
-- Upload progress is driven by Rubika chunk callbacks and shown as a percent during transfer
+- `main.py` - starts both processes
+- `telebot.py` - Telegram bot, downloads, queueing, status updates, buttons
+- `rub.py` - Rubika uploader, retries, cleanup
+- `task_store.py` - queue and task state helpers
 
 ## Troubleshooting
 
 If the bot does not start:
 
-- verify the `.env` values
-- make sure all dependencies are installed
-- confirm your Telegram API credentials are valid
+- verify `.env`
+- install dependencies
+- confirm Telegram credentials are valid
 
-If Rubika uploads fail:
+If uploads fail:
 
-- check that the Rubika session is valid
+- check the Rubika session
 - review `queue/failed.jsonl`
-- look for the downloaded file in `downloads/` if the job failed after retries
+- confirm the file still exists in `downloads/`
+- check server memory and swap if the process was killed
 
-## License
+## Notes
 
-No license file is included in this repository yet. Add one if you plan to distribute or open-source the project publicly.
+- README documents video support only.
+- Rubika Saved Messages is shown in English here intentionally.
