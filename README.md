@@ -237,7 +237,7 @@ screen -dmS "$SCREEN_NAME" bash -lc "cd '$APP_DIR' && exec '$APP_DIR/venv/bin/py
 
 echo "==> Done"
 echo "Check sessions with: screen -ls"
-echo "Attach to session with: screen -r $SCREEN_NAME"
+echo "Attach with: screen -r $SCREEN_NAME"
 ```
 
 How to use it:
