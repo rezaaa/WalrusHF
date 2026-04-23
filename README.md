@@ -266,8 +266,3 @@ If uploads fail:
 - review `queue/failed.jsonl`
 - confirm the file still exists in `downloads/`
 - check server memory and swap if the process was killed
-
-## Notes
-
-- README documents video support only.
-- Rubika Saved Messages is shown in English here intentionally.
