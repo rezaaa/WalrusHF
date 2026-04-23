@@ -25,6 +25,8 @@ Walrus uses a simple queue-based flow:
 - Supports canceling active or queued transfers
 - Supports retrying failed transfers when the downloaded file still exists
 - Provides quick action buttons for status, transfers, cleanup, cancel, and retry
+- Sends a completion notification when a transfer finishes successfully
+- Shows total elapsed transfer time on successful uploads
 - Uploads videos to Rubika Saved Messages with their original filename
 
 ## Bot Controls
@@ -51,6 +53,11 @@ Transfer message buttons:
 
 - `🛑 Cancel` on active and queued transfers
 - `🔁 Retry` on failed transfers
+
+Successful transfers:
+
+- the original status message is updated with the total transfer time
+- the bot sends a separate completion message when the upload finishes
 
 ## Retry Policy
 
