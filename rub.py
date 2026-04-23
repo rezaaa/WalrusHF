@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+from html import escape
 import os
 import time
 from pathlib import Path
@@ -126,6 +127,79 @@ def update_telegram_status(
         )
     except Exception:
         pass
+
+
+def send_telegram_message(
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+) -> None:
+    if not BOT_TOKEN or not chat_id:
+        return
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+
+    if reply_to_message_id:
+        payload["reply_to_message_id"] = reply_to_message_id
+
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json=payload,
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
+def format_duration(seconds: float | int | None) -> str:
+    total_seconds = max(0, int(seconds or 0))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def task_elapsed_text(task: dict) -> str | None:
+    started_at = task.get("started_at")
+    if started_at is None:
+        return None
+
+    try:
+        started_at_value = float(started_at)
+    except (TypeError, ValueError):
+        return None
+
+    return format_duration(time.time() - started_at_value)
+
+
+def notify_transfer_complete(task: dict, elapsed_text: str | None) -> None:
+    chat_id = task.get("chat_id")
+    if not chat_id:
+        return
+
+    file_name = task.get("file_name", Path(task.get("path", "")).name or "file")
+    lines = [
+        "<b>✅ Transfer Complete</b>",
+        f"🎞 <b>Video:</b> <code>{escape(file_name)}</code>",
+    ]
+
+    if elapsed_text:
+        lines.append(f"⏱ <b>Time:</b> <code>{escape(elapsed_text)}</code>")
+
+    send_telegram_message(
+        int(chat_id),
+        "\n".join(lines),
+        reply_to_message_id=task.get("status_message_id"),
+    )
 
 
 async def send_document(
@@ -328,13 +402,19 @@ def process_task(task: dict) -> None:
     clear_cancelled(task_id)
     task["upload_percent"] = 100
     save_processing(task)
+    elapsed_text = task_elapsed_text(task)
     update_telegram_status(
         task,
         stage="✅ Uploaded",
-        upload_status="Video uploaded successfully.",
+        upload_status=(
+            f"Video uploaded successfully in {elapsed_text}."
+            if elapsed_text
+            else "Video uploaded successfully."
+        ),
         attempt_text=task.get("attempt_text"),
         action=None,
     )
+    notify_transfer_complete(task, elapsed_text)
 
 
 def recover_cancelled_processing_task() -> None:

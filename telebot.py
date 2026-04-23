@@ -811,6 +811,7 @@ async def retry_task_by_id(client: Client, message: Message, task_id: str) -> No
 
     task["upload_percent"] = 0
     task["attempt_text"] = None
+    task["started_at"] = time.time()
     task["file_size"] = int(task.get("file_size") or path.stat().st_size)
     append_task(task)
 
@@ -959,6 +960,7 @@ async def media_handler(client: Client, message: Message):
     file_name = build_download_filename(message, media_type, media)
     file_size = int(getattr(media, "file_size", 0) or 0)
     download_path = DOWNLOAD_DIR / file_name
+    started_at = time.time()
 
     status = await message.reply_text(
         build_status_text(
@@ -981,6 +983,7 @@ async def media_handler(client: Client, message: Message):
         "download_path": str(download_path),
         "file_name": file_name,
         "file_size": file_size,
+        "started_at": started_at,
         "cancelled": False,
         "download_percent": 0,
         "upload_percent": 0,
@@ -1019,6 +1022,7 @@ async def media_handler(client: Client, message: Message):
             "file_name": file_name,
             "file_size": file_size,
             "media_type": media_type,
+            "started_at": started_at,
         }
 
         append_task(task)
