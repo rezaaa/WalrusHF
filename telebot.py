@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from dotenv import load_dotenv
 from pyrogram import Client, enums, filters
@@ -18,6 +20,7 @@ from pyrogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
+import requests
 
 from task_store import (
     DOWNLOAD_DIR,
@@ -33,6 +36,7 @@ from task_store import (
     load_worker_pid,
     ltr_code,
     mark_cancelled,
+    normalize_upload_filename,
     queue_size,
     read_failed_entries,
     read_queue_tasks,
@@ -69,6 +73,16 @@ BTN_TRANSFERS = "📋 Transfers"
 BTN_CLEANUP = "🧹 Cleanup"
 BTN_CANCEL = "🛑 Cancel"
 MENU_BUTTONS = {BTN_STATUS, BTN_TRANSFERS, BTN_CLEANUP, BTN_CANCEL}
+DIRECT_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".webm",
+    ".flv",
+    ".m4v",
+}
+URL_PATTERN = re.compile(r"(?P<url>(?:https?|file)://\S+)", re.IGNORECASE)
 
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -130,7 +144,7 @@ def build_menu_text() -> str:
     return "\n".join(
         [
             "<b>🎬 Walrus</b>",
-            "📤 <b>Send a video</b> and I will upload it to Rubika Saved Messages.",
+            "📤 <b>Send a video or direct video link</b> and I will upload it to Rubika Saved Messages.",
         ]
     )
 
@@ -557,25 +571,62 @@ def get_media(message: Message):
     return None, None
 
 
+def extract_direct_url(text: str | None) -> str | None:
+    if not text:
+        return None
+
+    match = URL_PATTERN.search(text.strip())
+    if not match:
+        return None
+
+    return match.group("url").rstrip('.,!?)"]}>\'')
+
+
+def path_name_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    return Path(unquote(parsed.path or "")).name
+
+
+def is_direct_video_filename(name: str) -> bool:
+    return Path(name).suffix.lower() in DIRECT_VIDEO_EXTENSIONS
+
+
+def build_url_download_filename(url: str, task_id: str, fallback_suffix: str = ".mp4") -> str:
+    original_name = normalize_upload_filename(path_name_from_url(url), f"video{fallback_suffix}")
+    stem, suffix = split_name(original_name or "video")
+
+    if suffix.lower() not in DIRECT_VIDEO_EXTENSIONS:
+        suffix = fallback_suffix if fallback_suffix in DIRECT_VIDEO_EXTENSIONS else ".mp4"
+
+    unique_name = f"{(stem or 'video')[:120]}_{task_id}{suffix}"
+    return safe_filename(unique_name, f"video_{task_id}{suffix}")
+
+
+class DirectDownloadCancelled(RuntimeError):
+    pass
+
+
 def build_download_filename(message: Message, media_type: str, media) -> str:
     original_name = getattr(media, "file_name", None)
+    default_extensions = {
+        "video": ".mp4",
+        "audio": ".mp3",
+        "voice": ".ogg",
+        "photo": ".jpg",
+        "animation": ".mp4",
+        "video_note": ".mp4",
+        "sticker": ".webp",
+    }
+    default_extension = default_extensions.get(media_type, ".bin")
 
     if not original_name:
         file_unique_id = getattr(media, "file_unique_id", None) or "file"
+        original_name = f"{file_unique_id}{default_extension}"
 
-        default_extensions = {
-            "video": ".mp4",
-            "audio": ".mp3",
-            "voice": ".ogg",
-            "photo": ".jpg",
-            "animation": ".mp4",
-            "video_note": ".mp4",
-            "sticker": ".webp",
-        }
-
-        original_name = f"{file_unique_id}{default_extensions.get(media_type, '.bin')}"
-
-    original_name = safe_filename(original_name)
+    original_name = normalize_upload_filename(
+        original_name,
+        f"file{default_extension}",
+    )
     stem, suffix = split_name(original_name)
 
     unique_name = f"{stem}_{message.id}{suffix or '.bin'}"
@@ -767,6 +818,170 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
         )
 
     return progress
+
+
+def make_direct_download_progress_callback(task_id: str, status_message: Message, task_meta: dict):
+    loop = asyncio.get_running_loop()
+    state = {"last_percent": -1, "last_update": 0.0}
+
+    def progress(current: int, total: int) -> None:
+        active = ACTIVE_DOWNLOADS.get(task_id)
+        if active and active.get("cancelled"):
+            raise DirectDownloadCancelled("Cancelled by user.")
+
+        if total > 0:
+            task_meta["file_size"] = total
+            if active is not None:
+                active["file_size"] = total
+            percent = min(100, max(0, int((current * 100) / total)))
+        else:
+            percent = 0
+
+        now = time.monotonic()
+        should_emit = (
+            percent == 100
+            or state["last_percent"] < 0
+            or percent - state["last_percent"] >= 10
+            or now - state["last_update"] >= 3
+        )
+
+        if not should_emit:
+            return
+
+        state["last_percent"] = percent
+        state["last_update"] = now
+        if active is not None:
+            active["download_percent"] = percent
+
+        text = build_status_text(
+            task_id=task_id,
+            file_name=task_meta["file_name"],
+            file_size=task_meta["file_size"],
+            stage="⬇️ Downloading",
+            download_percent=percent,
+            upload_percent=0,
+            upload_status="Downloading the video from the link.",
+        )
+        loop.call_soon_threadsafe(
+            lambda: loop.create_task(
+                safe_edit_status(
+                    status_message,
+                    text,
+                    reply_markup=status_action_keyboard(task_id, "cancel"),
+                )
+            )
+        )
+
+    return progress
+
+
+def download_file_url(
+    url: str,
+    download_path: Path,
+    progress,
+    should_cancel,
+) -> Path:
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+
+    if scheme == "file":
+        source_path = Path(unquote(parsed.path or ""))
+        if not source_path.exists() or not source_path.is_file():
+            raise RuntimeError("Local file URL not found.")
+        if not is_direct_video_filename(source_path.name):
+            raise RuntimeError("The file URL must point to a video file.")
+
+        total = source_path.stat().st_size
+        copied = 0
+        progress(0, total)
+        with source_path.open("rb") as source, download_path.open("wb") as target:
+            while True:
+                if should_cancel():
+                    raise DirectDownloadCancelled("Cancelled by user.")
+                chunk = source.read(1024 * 256)
+                if not chunk:
+                    break
+                target.write(chunk)
+                copied += len(chunk)
+                progress(copied, total)
+        progress(total, total)
+        return download_path
+
+    if scheme not in {"http", "https"}:
+        raise RuntimeError("Only http(s):// and file:// video URLs are supported.")
+
+    with requests.get(url, stream=True, timeout=(15, 120)) as response:
+        response.raise_for_status()
+
+        content_type = response.headers.get("content-type", "")
+        if not (
+            content_type.lower().startswith("video/")
+            or is_direct_video_filename(path_name_from_url(response.url))
+            or is_direct_video_filename(download_path.name)
+        ):
+            raise RuntimeError("The URL must point to a direct video file.")
+
+        total = int(response.headers.get("content-length") or 0)
+        if total > 0:
+            progress(0, total)
+
+        downloaded = 0
+        with download_path.open("wb") as target:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if should_cancel():
+                    raise DirectDownloadCancelled("Cancelled by user.")
+                if not chunk:
+                    continue
+                target.write(chunk)
+                downloaded += len(chunk)
+                progress(downloaded, total)
+
+        progress(total or downloaded, total or downloaded)
+        return download_path
+
+
+async def queue_downloaded_file(
+    task_id: str,
+    message: Message,
+    status: Message,
+    file_name: str,
+    file_size: int,
+    media_type: str,
+    started_at: float,
+    downloaded_path: Path,
+    caption: str = "",
+) -> None:
+    file_name = normalize_upload_filename(file_name, downloaded_path.name)
+    queue_position = queue_size() + (1 if load_processing() else 0) + 1
+    task = {
+        "task_id": task_id,
+        "type": "local_file",
+        "path": str(downloaded_path),
+        "caption": caption,
+        "chat_id": message.chat.id,
+        "status_message_id": status.id,
+        "file_name": file_name,
+        "file_size": file_size,
+        "media_type": media_type,
+        "started_at": started_at,
+    }
+
+    append_task(task)
+
+    await safe_edit_status(
+        status,
+        build_status_text(
+            task_id=task_id,
+            file_name=file_name,
+            file_size=file_size,
+            stage="⏳ Upload Queue",
+            download_percent=100,
+            upload_percent=0,
+            upload_status="Waiting for upload to Rubika.",
+            queue_position=queue_position,
+        ),
+        reply_markup=status_action_keyboard(task_id, "cancel"),
+    )
 
 
 @app.on_message(filters.private & filters.command("start"))
@@ -1059,35 +1274,16 @@ async def media_handler(client: Client, message: Message):
         if not downloaded_path.exists():
             raise RuntimeError("Downloaded file not found.")
 
-        queue_position = queue_size() + (1 if load_processing() else 0) + 1
-        task = {
-            "task_id": task_id,
-            "type": "local_file",
-            "path": str(downloaded_path),
-            "caption": message.caption or "",
-            "chat_id": message.chat.id,
-            "status_message_id": status.id,
-            "file_name": file_name,
-            "file_size": file_size,
-            "media_type": media_type,
-            "started_at": started_at,
-        }
-
-        append_task(task)
-
-        await safe_edit_status(
-            status,
-            build_status_text(
-                task_id=task_id,
-                file_name=file_name,
-                file_size=file_size,
-                stage="⏳ Upload Queue",
-                download_percent=100,
-                upload_percent=0,
-                upload_status="Waiting for upload to Rubika.",
-                queue_position=queue_position,
-            ),
-            reply_markup=status_action_keyboard(task_id, "cancel"),
+        await queue_downloaded_file(
+            task_id=task_id,
+            message=message,
+            status=status,
+            file_name=file_name,
+            file_size=file_size,
+            media_type=media_type,
+            started_at=started_at,
+            downloaded_path=downloaded_path,
+            caption=message.caption or "",
         )
 
     except Exception as e:
@@ -1119,6 +1315,119 @@ async def media_handler(client: Client, message: Message):
                     download_percent=active.get("download_percent", 0),
                     upload_percent=active.get("upload_percent", 0),
                     upload_status="The download did not complete.",
+                    note=str(e),
+                ),
+            )
+    finally:
+        ACTIVE_DOWNLOADS.pop(task_id, None)
+
+
+@app.on_message(filters.private & filters.text)
+async def direct_video_url_handler(_client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+
+    text = (message.text or "").strip()
+    if not text or text in MENU_BUTTONS or text.startswith("/"):
+        return
+
+    url = extract_direct_url(text)
+    if not url:
+        return
+
+    task_id = uuid.uuid4().hex[:10]
+    fallback_suffix = Path(path_name_from_url(url)).suffix.lower()
+    if fallback_suffix not in DIRECT_VIDEO_EXTENSIONS:
+        fallback_suffix = ".mp4"
+
+    file_name = build_url_download_filename(url, task_id, fallback_suffix)
+    download_path = DOWNLOAD_DIR / file_name
+    started_at = time.time()
+    task_meta = {"file_name": file_name, "file_size": 0}
+
+    status = await message.reply_text(
+        build_status_text(
+            task_id=task_id,
+            file_name=file_name,
+            file_size=0,
+            stage="⏳ Preparing Download",
+            download_percent=0,
+            upload_percent=0,
+            upload_status="The video link will start downloading soon.",
+        ),
+        parse_mode=enums.ParseMode.HTML,
+        reply_markup=status_action_keyboard(task_id, "cancel"),
+    )
+
+    ACTIVE_DOWNLOADS[task_id] = {
+        "task_id": task_id,
+        "chat_id": message.chat.id,
+        "status_message_id": status.id,
+        "download_path": str(download_path),
+        "file_name": file_name,
+        "file_size": 0,
+        "started_at": started_at,
+        "cancelled": False,
+        "download_percent": 0,
+        "upload_percent": 0,
+    }
+
+    try:
+        downloaded_path = await asyncio.to_thread(
+            download_file_url,
+            url,
+            download_path,
+            make_direct_download_progress_callback(task_id, status, task_meta),
+            lambda: ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled", False),
+        )
+
+        if ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled"):
+            raise DirectDownloadCancelled("Cancelled by user.")
+
+        if not downloaded_path.exists():
+            raise RuntimeError("Downloaded file not found.")
+
+        file_size = task_meta["file_size"] or downloaded_path.stat().st_size
+        await queue_downloaded_file(
+            task_id=task_id,
+            message=message,
+            status=status,
+            file_name=file_name,
+            file_size=file_size,
+            media_type="video",
+            started_at=started_at,
+            downloaded_path=downloaded_path,
+            caption="",
+        )
+    except Exception as e:
+        active = ACTIVE_DOWNLOADS.get(task_id, {})
+        was_cancelled = active.get("cancelled") or isinstance(e, DirectDownloadCancelled)
+        cleanup_download_artifact(str(download_path))
+
+        if was_cancelled:
+            await safe_edit_status(
+                status,
+                build_status_text(
+                    task_id=task_id,
+                    file_name=file_name,
+                    file_size=task_meta.get("file_size", 0),
+                    stage="🛑 Cancelled",
+                    download_percent=active.get("download_percent", 0),
+                    upload_percent=0,
+                    upload_status="Transfer stopped.",
+                ),
+            )
+        else:
+            await safe_edit_status(
+                status,
+                build_status_text(
+                    task_id=task_id,
+                    file_name=file_name,
+                    file_size=task_meta.get("file_size", 0),
+                    stage="❌ Download Failed",
+                    download_percent=active.get("download_percent", 0),
+                    upload_percent=0,
+                    upload_status="The link download did not complete.",
                     note=str(e),
                 ),
             )

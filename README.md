@@ -14,7 +14,7 @@ This project was originally inspired by [caffeinexz/Tele2Rub](https://github.com
 
 Walrus uses a simple queue-based flow:
 
-1. The Telegram bot receives a video in a private chat.
+1. The Telegram bot receives a video in a private chat, or a direct video file URL in a text message.
 2. The file is downloaded into `downloads/`.
 3. A task is added to `queue/tasks.jsonl`.
 4. The Rubika worker uploads the file.
@@ -23,6 +23,7 @@ Walrus uses a simple queue-based flow:
 ## Features
 
 - Accepts video messages in Telegram private chat
+- Accepts direct video file links such as `https://...mp4` and `file:///...mp4`
 - Keeps a local upload queue to avoid overlapping jobs
 - Shows live download and upload progress
 - Supports upload retries for temporary Rubika errors
@@ -62,6 +63,12 @@ Successful transfers:
 
 - the original status message is updated with the total transfer time
 - the bot sends a separate completion message when the upload finishes
+
+Direct link uploads:
+
+- send a message containing a direct video file URL
+- supported schemes: `https://`, `http://`, and `file://`
+- the link should point to the actual video file, not a webpage
 
 ## Retry Policy
 

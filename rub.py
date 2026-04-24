@@ -21,6 +21,7 @@ from task_store import (
     ensure_storage_dirs,
     is_cancelled,
     load_processing,
+    normalize_upload_filename,
     save_worker_pid,
     pop_first_task,
     save_processing,
@@ -367,7 +368,7 @@ def process_task(task: dict) -> None:
         raise RuntimeError("Local file not found.")
 
     send_path = original_path
-    send_name = task.get("file_name") or original_path.name
+    send_name = normalize_upload_filename(task.get("file_name") or original_path.name, original_path.name)
 
     try:
         if is_cancelled(task_id):

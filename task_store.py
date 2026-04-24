@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from html import escape
 from pathlib import Path
 from typing import Callable, Optional
@@ -29,6 +30,32 @@ def safe_filename(name: Optional[str], default: str = "file.bin") -> str:
     name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", name)
     name = name.rstrip(". ")
     return name[:200] or default
+
+
+def normalize_upload_filename(name: Optional[str], default: str = "video.mp4") -> str:
+    normalized = unicodedata.normalize("NFKC", (name or "").strip())
+    stem, suffix = split_name(normalized or default)
+    suffix = safe_filename((suffix or Path(default).suffix or ".mp4").lower(), ".mp4")
+
+    cleaned_chars: list[str] = []
+    for char in stem:
+        category = unicodedata.category(char)
+        if category[0] in {"L", "N", "M"}:
+            cleaned_chars.append(char)
+            continue
+        if category == "Zs" or char in "._-()[]{} ":
+            cleaned_chars.append(" " if category == "Zs" else char)
+            continue
+        cleaned_chars.append(" ")
+
+    cleaned_stem = "".join(cleaned_chars)
+    cleaned_stem = re.sub(r"[_-]+", " ", cleaned_stem)
+    cleaned_stem = re.sub(r"\s*\.\s*", ".", cleaned_stem)
+    cleaned_stem = re.sub(r"\s+", " ", cleaned_stem).strip(" .-_")
+
+    fallback_stem = split_name(default)[0] or "video"
+    safe_stem = safe_filename(cleaned_stem or fallback_stem, fallback_stem)
+    return safe_filename(f"{safe_stem}{suffix}", f"{fallback_stem}{suffix}")
 
 
 def split_name(filename: str) -> tuple[str, str]:
