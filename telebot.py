@@ -85,6 +85,8 @@ DIRECT_VIDEO_EXTENSIONS = {
     ".m4v",
 }
 URL_PATTERN = re.compile(r"(?P<url>(?:https?|file)://\S+)", re.IGNORECASE)
+DIRECT_DOWNLOAD_MAX_RETRIES = 5
+DIRECT_DOWNLOAD_RETRY_DELAY = 3
 
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -608,6 +610,45 @@ class DirectDownloadCancelled(RuntimeError):
     pass
 
 
+def is_transient_download_error(error_text: str) -> bool:
+    return any(
+        key in error_text
+        for key in [
+            "timeout",
+            "timed out",
+            "connection reset",
+            "remote disconnected",
+            "temporarily unavailable",
+            "incomplete read",
+            "chunkedencodingerror",
+            "connection aborted",
+            "502",
+            "503",
+            "504",
+        ]
+    )
+
+
+def wait_for_direct_retry(seconds: int, should_cancel) -> None:
+    for _ in range(seconds):
+        if should_cancel():
+            raise DirectDownloadCancelled("Cancelled by user.")
+        time.sleep(1)
+
+
+def response_total_size(response: requests.Response, downloaded: int) -> int:
+    content_range = response.headers.get("content-range", "").strip()
+    if content_range and "/" in content_range:
+        total_text = content_range.rsplit("/", 1)[-1].strip()
+        if total_text.isdigit():
+            return int(total_text)
+
+    content_length = int(response.headers.get("content-length") or 0)
+    if response.status_code == 206 and content_length > 0:
+        return downloaded + content_length
+    return content_length
+
+
 def build_download_filename(message: Message, media_type: str, media) -> str:
     original_name = getattr(media, "file_name", None)
     default_extensions = {
@@ -935,6 +976,7 @@ def download_file_url(
     download_path: Path,
     progress,
     should_cancel,
+    task_id: str,
 ) -> Path:
     parsed = urlparse(url)
     scheme = parsed.scheme.lower()
@@ -965,34 +1007,85 @@ def download_file_url(
     if scheme not in {"http", "https"}:
         raise RuntimeError("Only http(s):// and file:// video URLs are supported.")
 
-    with requests.get(url, stream=True, timeout=(15, 120)) as response:
-        response.raise_for_status()
+    downloaded = download_path.stat().st_size if download_path.exists() else 0
+    last_error: Exception | None = None
 
-        content_type = response.headers.get("content-type", "")
-        if not (
-            content_type.lower().startswith("video/")
-            or is_direct_video_filename(path_name_from_url(response.url))
-            or is_direct_video_filename(download_path.name)
-        ):
-            raise RuntimeError("The URL must point to a direct video file.")
+    for attempt in range(1, DIRECT_DOWNLOAD_MAX_RETRIES + 1):
+        if should_cancel():
+            raise DirectDownloadCancelled("Cancelled by user.")
 
-        total = int(response.headers.get("content-length") or 0)
-        if total > 0:
-            progress(0, total)
+        resume_from = download_path.stat().st_size if download_path.exists() else 0
+        headers = {}
+        if resume_from > 0:
+            headers["Range"] = f"bytes={resume_from}-"
 
-        downloaded = 0
-        with download_path.open("wb") as target:
-            for chunk in response.iter_content(chunk_size=1024 * 256):
-                if should_cancel():
-                    raise DirectDownloadCancelled("Cancelled by user.")
-                if not chunk:
+        try:
+            with requests.get(
+                url,
+                stream=True,
+                timeout=(15, 120),
+                headers=headers,
+            ) as response:
+                if response.status_code == 416 and resume_from > 0:
+                    total = response_total_size(response, 0)
+                    if total > 0 and resume_from >= total:
+                        progress(total, total)
+                        return download_path
+                    download_path.unlink(missing_ok=True)
                     continue
-                target.write(chunk)
-                downloaded += len(chunk)
-                progress(downloaded, total)
 
-        progress(total or downloaded, total or downloaded)
-        return download_path
+                response.raise_for_status()
+
+                content_type = response.headers.get("content-type", "")
+                if not (
+                    content_type.lower().startswith("video/")
+                    or is_direct_video_filename(path_name_from_url(response.url))
+                    or is_direct_video_filename(download_path.name)
+                ):
+                    raise RuntimeError("The URL must point to a direct video file.")
+
+                if resume_from > 0 and response.status_code != 206:
+                    resume_from = 0
+                    downloaded = 0
+                    download_path.unlink(missing_ok=True)
+
+                total = response_total_size(response, resume_from)
+                if total > 0:
+                    progress(resume_from, total)
+
+                downloaded = resume_from
+                mode = "ab" if resume_from > 0 else "wb"
+                with download_path.open(mode) as target:
+                    for chunk in response.iter_content(chunk_size=1024 * 256):
+                        if should_cancel():
+                            raise DirectDownloadCancelled("Cancelled by user.")
+                        if not chunk:
+                            continue
+                        target.write(chunk)
+                        downloaded += len(chunk)
+                        progress(downloaded, total)
+
+                if total > 0 and downloaded < total:
+                    raise RuntimeError(
+                        f"Download interrupted at {downloaded} of {total} bytes."
+                    )
+
+                progress(total or downloaded, total or downloaded)
+                return download_path
+        except Exception as error:
+            if isinstance(error, DirectDownloadCancelled):
+                raise
+
+            last_error = error
+            if attempt >= DIRECT_DOWNLOAD_MAX_RETRIES:
+                break
+
+            if not is_transient_download_error(str(error).lower()):
+                break
+
+            wait_for_direct_retry(DIRECT_DOWNLOAD_RETRY_DELAY * attempt, should_cancel)
+
+    raise last_error if last_error else RuntimeError("Download failed.")
 
 
 async def queue_downloaded_file(
@@ -1434,6 +1527,7 @@ async def direct_video_url_handler(_client: Client, message: Message):
             download_path,
             make_direct_download_progress_callback(task_id, status, task_meta),
             lambda: ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled", False),
+            task_id,
         )
 
         if ACTIVE_DOWNLOADS.get(task_id, {}).get("cancelled"):
