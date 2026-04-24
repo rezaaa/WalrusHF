@@ -30,6 +30,8 @@ from task_store import (
     ensure_storage_dirs,
     find_failed_entry,
     human_size,
+    human_duration,
+    human_speed,
     find_queued_task,
     is_cancelled,
     load_processing,
@@ -770,7 +772,13 @@ def stop_rubika_worker() -> bool:
 
 def make_download_progress_callback(task_id: str, status_message: Message, task_meta: dict):
     loop = asyncio.get_running_loop()
-    state = {"last_percent": -1, "last_update": 0.0}
+    state = {
+        "last_percent": -1,
+        "last_update": 0.0,
+        "last_bytes": 0,
+        "last_sample_at": time.monotonic(),
+        "speed_bps": 0.0,
+    }
 
     def progress(current: int, total: int, client: Client, *_args) -> None:
         active = ACTIVE_DOWNLOADS.get(task_id)
@@ -783,13 +791,31 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
 
         percent = int((current * 100) / total)
         percent = min(100, max(0, percent))
-
         now = time.monotonic()
+
+        delta_bytes = max(0, current - state["last_bytes"])
+        delta_time = max(0.0, now - state["last_sample_at"])
+        if delta_bytes > 0 and delta_time > 0:
+            instant_speed = delta_bytes / delta_time
+            state["speed_bps"] = (
+                instant_speed
+                if state["speed_bps"] <= 0
+                else (state["speed_bps"] * 0.65) + (instant_speed * 0.35)
+            )
+            state["last_bytes"] = current
+            state["last_sample_at"] = now
+
+        speed_text = human_speed(state["speed_bps"]) if state["speed_bps"] > 0 else None
+        eta_text = None
+        remaining = max(0, total - current)
+        if remaining > 0 and state["speed_bps"] > 0:
+            eta_text = human_duration(remaining / state["speed_bps"])
+
         should_emit = (
             percent == 100
             or state["last_percent"] < 0
             or percent - state["last_percent"] >= 10
-            or now - state["last_update"] >= 3
+            or now - state["last_update"] >= 2
         )
 
         if not should_emit:
@@ -808,6 +834,8 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
             download_percent=percent,
             upload_percent=0,
             upload_status="The video will enter the upload queue after download.",
+            speed_text=speed_text,
+            eta_text=eta_text,
         )
         loop.create_task(
             safe_edit_status(
@@ -822,7 +850,13 @@ def make_download_progress_callback(task_id: str, status_message: Message, task_
 
 def make_direct_download_progress_callback(task_id: str, status_message: Message, task_meta: dict):
     loop = asyncio.get_running_loop()
-    state = {"last_percent": -1, "last_update": 0.0}
+    state = {
+        "last_percent": -1,
+        "last_update": 0.0,
+        "last_bytes": 0,
+        "last_sample_at": time.monotonic(),
+        "speed_bps": 0.0,
+    }
 
     def progress(current: int, total: int) -> None:
         active = ACTIVE_DOWNLOADS.get(task_id)
@@ -838,11 +872,30 @@ def make_direct_download_progress_callback(task_id: str, status_message: Message
             percent = 0
 
         now = time.monotonic()
+        delta_bytes = max(0, current - state["last_bytes"])
+        delta_time = max(0.0, now - state["last_sample_at"])
+        if delta_bytes > 0 and delta_time > 0:
+            instant_speed = delta_bytes / delta_time
+            state["speed_bps"] = (
+                instant_speed
+                if state["speed_bps"] <= 0
+                else (state["speed_bps"] * 0.65) + (instant_speed * 0.35)
+            )
+            state["last_bytes"] = current
+            state["last_sample_at"] = now
+
+        speed_text = human_speed(state["speed_bps"]) if state["speed_bps"] > 0 else None
+        eta_text = None
+        if total > 0:
+            remaining = max(0, total - current)
+            if remaining > 0 and state["speed_bps"] > 0:
+                eta_text = human_duration(remaining / state["speed_bps"])
+
         should_emit = (
             percent == 100
             or state["last_percent"] < 0
             or percent - state["last_percent"] >= 10
-            or now - state["last_update"] >= 3
+            or now - state["last_update"] >= 2
         )
 
         if not should_emit:
@@ -861,6 +914,8 @@ def make_direct_download_progress_callback(task_id: str, status_message: Message
             download_percent=percent,
             upload_percent=0,
             upload_status="Downloading the video from the link.",
+            speed_text=speed_text,
+            eta_text=eta_text,
         )
         loop.call_soon_threadsafe(
             lambda: loop.create_task(

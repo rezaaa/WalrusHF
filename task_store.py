@@ -78,6 +78,25 @@ def human_size(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def human_speed(bytes_per_second: float | int | None) -> str:
+    speed = float(bytes_per_second or 0)
+    if speed <= 0:
+        return "0 B/s"
+    return f"{human_size(int(speed))}/s"
+
+
+def human_duration(seconds: float | int | None) -> str:
+    total_seconds = max(0, int(seconds or 0))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
 def progress_bar(percent: int, width: int = 12) -> str:
     percent = max(0, min(100, percent))
     filled = round((percent / 100) * width)
@@ -116,6 +135,8 @@ def build_status_text(
     queue_position: int | None = None,
     note: str | None = None,
     attempt_text: str | None = None,
+    speed_text: str | None = None,
+    eta_text: str | None = None,
 ) -> str:
     safe_task_id = task_id or "-"
     safe_file_name = truncate_middle(file_name or "file")
@@ -140,6 +161,12 @@ def build_status_text(
 
     if attempt_text:
         lines.append(f"🔁 <b>Attempt:</b> {ltr_code(attempt_text)}")
+
+    if speed_text:
+        lines.append(f"⚡ <b>Speed:</b> {ltr_code(speed_text)}")
+
+    if eta_text:
+        lines.append(f"⏱ <b>ETA:</b> {ltr_code(eta_text)}")
 
     if queue_position is not None:
         lines.append(f"⏳ <b>Queue:</b> {ltr_code(str(queue_position))}")

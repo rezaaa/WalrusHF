@@ -19,6 +19,8 @@ from task_store import (
     clear_worker_pid,
     cleanup_local_file,
     ensure_storage_dirs,
+    human_duration,
+    human_speed,
     is_cancelled,
     load_processing,
     normalize_upload_filename,
@@ -105,6 +107,8 @@ def update_telegram_status(
             upload_status=upload_status,
             note=note,
             attempt_text=attempt_text or task.get("attempt_text"),
+            speed_text=task.get("speed_text"),
+            eta_text=task.get("eta_text"),
         ),
         "parse_mode": "HTML",
     }
@@ -247,7 +251,13 @@ def normalize_failed_progress(task: dict) -> None:
 
 
 def make_upload_progress_callback(task: dict, attempt: int):
-    state = {"last_percent": -1, "last_update": 0.0}
+    state = {
+        "last_percent": -1,
+        "last_update": 0.0,
+        "last_bytes": 0,
+        "last_sample_at": time.monotonic(),
+        "speed_bps": 0.0,
+    }
     task_id = task.get("task_id", "")
 
     async def callback(total: int, current: int) -> None:
@@ -262,6 +272,18 @@ def make_upload_progress_callback(task: dict, attempt: int):
             return
 
         now = time.monotonic()
+        delta_bytes = max(0, current - state["last_bytes"])
+        delta_time = max(0.0, now - state["last_sample_at"])
+        if delta_bytes > 0 and delta_time > 0:
+            instant_speed = delta_bytes / delta_time
+            state["speed_bps"] = (
+                instant_speed
+                if state["speed_bps"] <= 0
+                else (state["speed_bps"] * 0.65) + (instant_speed * 0.35)
+            )
+            state["last_bytes"] = current
+            state["last_sample_at"] = now
+
         should_emit = (
             percent == 100
             or state["last_percent"] < 0
@@ -276,6 +298,13 @@ def make_upload_progress_callback(task: dict, attempt: int):
         state["last_update"] = now
         task["upload_percent"] = percent
         task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
+        task["speed_text"] = human_speed(state["speed_bps"]) if state["speed_bps"] > 0 else None
+        remaining = max(0, total - current)
+        task["eta_text"] = (
+            human_duration(remaining / state["speed_bps"])
+            if remaining > 0 and state["speed_bps"] > 0
+            else None
+        )
         save_processing(task)
         update_telegram_status(
             task,
@@ -302,6 +331,8 @@ def send_with_retry(
 
         task["upload_percent"] = 0
         task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
+        task["speed_text"] = None
+        task["eta_text"] = None
         save_processing(task)
         update_telegram_status(
             task,
@@ -331,6 +362,8 @@ def send_with_retry(
             last_error = e
             error_text = str(e).lower()
             task["attempt_text"] = f"{attempt} of {MAX_RETRIES}"
+            task["speed_text"] = None
+            task["eta_text"] = None
             normalize_failed_progress(task)
             save_processing(task)
 
@@ -341,6 +374,8 @@ def send_with_retry(
                 next_attempt_text = f"{attempt + 1} of {MAX_RETRIES}"
                 task["upload_percent"] = 0
                 task["attempt_text"] = next_attempt_text
+                task["speed_text"] = None
+                task["eta_text"] = None
                 save_processing(task)
                 update_telegram_status(
                     task,
@@ -402,6 +437,8 @@ def process_task(task: dict) -> None:
     cleanup_local_file(str(send_path))
     clear_cancelled(task_id)
     task["upload_percent"] = 100
+    task["speed_text"] = None
+    task["eta_text"] = None
     save_processing(task)
     elapsed_text = task_elapsed_text(task)
     update_telegram_status(
