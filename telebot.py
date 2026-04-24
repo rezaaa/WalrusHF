@@ -592,15 +592,22 @@ def get_media(message: Message):
     return None, None
 
 
-def extract_direct_url(text: str | None) -> str | None:
+def extract_direct_urls(text: str | None) -> list[str]:
     if not text:
-        return None
+        return []
 
-    match = URL_PATTERN.search(text.strip())
-    if not match:
-        return None
+    matches = URL_PATTERN.finditer(text.strip())
+    urls: list[str] = []
+    seen: set[str] = set()
 
-    return match.group("url").rstrip('.,!?)"]}>\'')
+    for match in matches:
+        url = match.group("url").rstrip('.,!?)"]}>\'')
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+
+    return urls
 
 
 def path_name_from_url(url: str) -> str:
@@ -1598,19 +1605,7 @@ async def media_handler(client: Client, message: Message):
         ACTIVE_DOWNLOADS.pop(task_id, None)
 
 
-@app.on_message(filters.private & filters.text)
-async def direct_video_url_handler(_client: Client, message: Message):
-    if not await ensure_authorized_message(message):
-        return
-
-    text = (message.text or "").strip()
-    if not text or text in MENU_BUTTONS or text.startswith("/"):
-        return
-
-    url = extract_direct_url(text)
-    if not url:
-        return
-
+async def process_direct_video_url(message: Message, url: str) -> None:
     task_id = uuid.uuid4().hex[:10]
     fallback_suffix = Path(path_name_from_url(url)).suffix.lower()
     if fallback_suffix not in DIRECT_VIDEO_EXTENSIONS:
@@ -1710,6 +1705,28 @@ async def direct_video_url_handler(_client: Client, message: Message):
             )
     finally:
         ACTIVE_DOWNLOADS.pop(task_id, None)
+
+
+@app.on_message(filters.private & filters.text)
+async def direct_video_url_handler(_client: Client, message: Message):
+    if not await ensure_authorized_message(message):
+        return
+
+    text = (message.text or "").strip()
+    if not text or text in MENU_BUTTONS or text.startswith("/"):
+        return
+
+    urls = extract_direct_urls(text)
+    if not urls:
+        return
+
+    if len(urls) > 1:
+        await message.reply_text(
+            f"🔗 Found {len(urls)} links. Starting downloads now.",
+            reply_markup=MENU_KEYBOARD,
+        )
+
+    await asyncio.gather(*(process_direct_video_url(message, url) for url in urls))
 
 
 if __name__ == "__main__":

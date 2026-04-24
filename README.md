@@ -24,6 +24,7 @@ Walrus uses a simple queue-based flow:
 
 - Accepts video messages in Telegram private chat
 - Accepts direct video file links such as `https://...mp4` and `file:///...mp4`
+- Accepts multiple direct video file links in one message and queues each one
 - Keeps a local upload queue to avoid overlapping jobs
 - Shows live download and upload progress
 - Supports upload retries for temporary Rubika errors
@@ -70,6 +71,7 @@ Successful transfers:
 Direct link uploads:
 
 - send a message containing a direct video file URL
+- you can include multiple direct video URLs in one message
 - supported schemes: `https://`, `http://`, and `file://`
 - the link should point to the actual video file, not a webpage
 
