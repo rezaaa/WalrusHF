@@ -116,14 +116,6 @@ Cleanup behavior:
 - canceled task: local file is deleted
 - failed upload: local file is kept
 
-If `queue/processing.json` was emptied manually, use this valid default:
-
-```json
-{}
-```
-
-Or simply delete the file and let the app recreate it when needed.
-
 ## Requirements
 
 - Python 3.9+
