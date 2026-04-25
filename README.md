@@ -62,8 +62,8 @@ Variables:
 - `RUBIKA_SESSION` - session name or path used by `rubpy`
 - `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
 
-Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
-That lets you switch the active Rubika number/session without editing `.env` or restarting the bot.
+`RUBIKA_SESSION` controls the session file name that `rubpy` uses on disk, such as `rubsession.rp`.
+Changing the Rubika account from Telegram replaces the authenticated session file for that configured session name. It does not require editing `.env` or restarting the bot.
 
 How to get your Telegram user ID:
 
