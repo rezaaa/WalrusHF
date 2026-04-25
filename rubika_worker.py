@@ -40,6 +40,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 MAX_RETRIES = 5
 RETRY_DELAY = 3
 ERROR_TEXT_LIMIT = 220
+RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
 
 ensure_storage_dirs()
 
@@ -52,6 +53,10 @@ MEDIA_EXTENSIONS = {
 
 
 class CancelledTaskError(RuntimeError):
+    pass
+
+
+class RubikaConnectTimeoutError(TimeoutError):
     pass
 
 
@@ -73,8 +78,19 @@ def ensure_session(session_name: str) -> None:
         return
 
     async def bootstrap():
-        async with RubikaClient(name=session_name):
+        client = RubikaClient(name=session_name)
+        entered = False
+        try:
+            await asyncio.wait_for(client.__aenter__(), timeout=RUBIKA_CONNECT_TIMEOUT)
+            entered = True
             return None
+        except asyncio.TimeoutError as exc:
+            raise RubikaConnectTimeoutError(
+                f"Rubika connection timed out after {RUBIKA_CONNECT_TIMEOUT}s during session bootstrap."
+            ) from exc
+        finally:
+            if entered:
+                await client.__aexit__(None, None, None)
 
     asyncio.run(bootstrap())
     print("Login successful.")
@@ -235,7 +251,17 @@ async def send_document(
     callback=None,
     file_name: str | None = None,
 ):
-    async with RubikaClient(name=session_name) as client:
+    client = RubikaClient(name=session_name)
+    entered = False
+    try:
+        await asyncio.wait_for(client.__aenter__(), timeout=RUBIKA_CONNECT_TIMEOUT)
+        entered = True
+    except asyncio.TimeoutError as exc:
+        raise RubikaConnectTimeoutError(
+            f"Rubika connection timed out after {RUBIKA_CONNECT_TIMEOUT}s."
+        ) from exc
+
+    try:
         return await client.send_document(
             target,
             file_path,
@@ -243,6 +269,9 @@ async def send_document(
             callback=callback,
             file_name=file_name or Path(file_path).name,
         )
+    finally:
+        if entered:
+            await client.__aexit__(None, None, None)
 
 
 def is_transient_upload_error(error_text: str) -> bool:
@@ -260,6 +289,7 @@ def is_transient_upload_error(error_text: str) -> bool:
             "timed out",
             "read timed out",
             "connect timeout",
+            "connection timed out",
             "cannot connect",
             "connection reset",
             "connection aborted",
