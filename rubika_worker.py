@@ -40,9 +40,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 MAX_RETRIES = 5
 RETRY_DELAY = 3
 ERROR_TEXT_LIMIT = 220
-UPLOAD_CHUNK_SIZE = 512 * 1024
-UPLOAD_CHUNK_RETRIES = 8
-UPLOAD_CHUNK_BACKOFF = 1.5
 
 ensure_storage_dirs()
 
@@ -411,9 +408,6 @@ def send_with_retry(
                     caption,
                     callback=make_upload_progress_callback(task, attempt),
                     file_name=upload_name,
-                    chunk=UPLOAD_CHUNK_SIZE,
-                    max_retries=UPLOAD_CHUNK_RETRIES,
-                    backoff=UPLOAD_CHUNK_BACKOFF,
                 )
             )
 
