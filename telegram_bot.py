@@ -380,6 +380,7 @@ async def cancel_auth_setup(message: Message) -> None:
 async def start_rubika_auth_process(message: Message, phone_number: str) -> None:
     existing_state = AUTH_SETUPS.get(message.chat.id, {})
     setup_id = existing_state.get("setup_id") or uuid.uuid4().hex
+    temp_message_ids = list(existing_state.get("temp_message_ids", []))
     normalized_phone = normalize_phone_number(phone_number)
     digits_only = normalized_phone[1:] if normalized_phone.startswith("+") else normalized_phone
     if not digits_only.isdigit() or len(digits_only) < 10:
@@ -431,6 +432,7 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
         "phone_number": normalized_phone,
         "process": process,
         "log_tail": [],
+        "temp_message_ids": temp_message_ids,
     }
 
     asyncio.create_task(monitor_rubika_auth_process(message.chat.id, setup_id, process))

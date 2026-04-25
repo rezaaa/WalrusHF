@@ -10,7 +10,11 @@ You are responsible for using it in a way that respects platform rules, local la
 
 ## Inspiration
 
-This project was originally inspired by [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub).
+This project started after a few storage/upload experiments:
+
+- I first tried Arvan OSS as the target, but it was too slow.
+- Then I tried Google Drive, but it got filtered.
+- After that, I found [caffeinexz/Tele2Rub](https://github.com/caffeinexz/Tele2Rub) and used it as the inspiration for trying Rubika instead.
 
 Walrus uses a simple queue-based flow:
 
@@ -163,15 +167,6 @@ Variables:
 Runtime upload settings are stored in `queue/settings.json` after you change them from Telegram.
 That lets you switch the active Rubika number/session without editing `.env` or restarting the bot.
 
-Changing the Rubika number now happens inside Telegram:
-
-1. Tap `⚙️ Settings` then `📱 Change Account`, or run `/set_rubika`
-2. Send the phone number
-3. Wait for the OTP prompt
-4. Send the OTP code
-
-The bot replaces the existing stored Rubika session after a successful login.
-
 How to get your Telegram user ID:
 
 - forward one of your messages to [@userinfobot](https://t.me/userinfobot)
@@ -180,14 +175,35 @@ How to get your Telegram user ID:
 Then put that number into `.env` as `OWNER_TELEGRAM_ID`.
 If you leave it unset, the bot stays open for everyone.
 
+## Rubika Login Flow
+
+Walrus supports two Rubika login flows:
+
+1. First run bootstrap:
+   If no saved Rubika session exists yet, the worker may ask in the terminal for the phone number and OTP code.
+2. Account changes later:
+   After the app is already running, you can switch the Rubika account from Telegram.
+
+Telegram-based account setup works like this:
+
+1. Open `⚙️ Settings`
+2. Tap `📱 Change Account` or run `/set_rubika`
+3. Send the Rubika phone number
+4. Wait for the OTP prompt
+5. Send the OTP code
+
+After a successful login, the current Rubika session is replaced and reused by the worker for future uploads.
+
+`rubpy` stores the authenticated session on disk using the configured `RUBIKA_SESSION` name. With current versions of `rubpy`, that is typically a `.rp` file such as `rubsession.rp`.
+
 ## First Run
 
-On the first worker run, Rubika login may ask for:
+If the configured Rubika session does not exist yet, the first worker run may ask for:
 
 1. Your phone number
 2. The OTP code sent by Rubika
 
-After that, the saved session is reused.
+After that, the saved session is reused unless you later replace it from Telegram.
 
 ## Run
 
