@@ -3,13 +3,33 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/walrus}"
 BRANCH="${BRANCH:-main}"
+REPO_URL="${REPO_URL:-https://github.com/rezaaa/walrus.git}"
 SCREEN_NAME="${SCREEN_NAME:-walrus}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_PYTHON="$APP_DIR/venv/bin/python"
 
-echo "==> Updating code"
+if ! command -v git >/dev/null 2>&1; then
+  echo "git is not installed. Install it with: apt update && apt install -y git"
+  exit 1
+fi
+
+if [ ! -d "$APP_DIR/.git" ]; then
+  echo "==> Cloning code"
+  mkdir -p "$(dirname "$APP_DIR")"
+  if [ -e "$APP_DIR" ] && [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+    echo "$APP_DIR exists but is not an empty git repo. Move it away or set APP_DIR to another path."
+    exit 1
+  fi
+  git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+else
+  echo "==> Updating code"
+  cd "$APP_DIR"
+  git fetch origin "$BRANCH"
+  git checkout "$BRANCH"
+  git pull --ff-only origin "$BRANCH"
+fi
+
 cd "$APP_DIR"
-git pull --ff-only origin "$BRANCH"
 
 if [ ! -x "$VENV_PYTHON" ]; then
   echo "==> Creating virtualenv"

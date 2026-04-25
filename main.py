@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import time
@@ -5,6 +6,20 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
+
+
+def maybe_reexec_with_venv() -> None:
+    venv_python = BASE_DIR / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not venv_python.exists():
+        return
+
+    if Path(sys.executable).resolve() == venv_python.resolve():
+        return
+
+    os.execv(str(venv_python), [str(venv_python), *sys.argv])
+
+
+maybe_reexec_with_venv()
 
 telegram_file = BASE_DIR / "telegram_bot.py"
 rubika_file = BASE_DIR / "rubika_worker.py"

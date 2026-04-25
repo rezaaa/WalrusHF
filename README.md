@@ -206,123 +206,64 @@ If the configured Rubika session does not exist yet, the first worker run may as
 
 After that, the saved session is reused unless you later replace it from Telegram.
 
-## Run
+## Server Setup With Script
 
-Start both processes with:
+Install the system packages once:
 
 ```bash
-python3 main.py
+apt update && apt install -y git python3 python3-venv screen
+```
+
+Clone Walrus and configure `.env`:
+
+```bash
+cd /opt
+git clone https://github.com/rezaaa/walrus.git
+cd /opt/walrus
+cp .env.example .env
+nano .env
+```
+
+Run the setup/update script:
+
+```bash
+bash update.sh
+```
+
+`update.sh` creates `venv/` if needed, installs dependencies, stops any old `walrus` screen session, and starts the app in a new screen session.
+
+Verify or attach to the running app:
+
+```bash
+screen -ls
+screen -r walrus
+```
+
+On the first Rubika login, the worker may ask for the phone number and OTP in that screen session. Type them directly in the terminal. Detach without stopping the app with `Ctrl + A`, then `D`.
+
+## Update on Server
+
+Use the same script for updates:
+
+```bash
+cd /opt/walrus
+bash update.sh
+```
+
+## Run Manually
+
+If you do not want to use screen:
+
+```bash
+cd /opt/walrus
+source venv/bin/activate
+python main.py
 ```
 
 This starts:
 
 - `telegram_bot.py` - Telegram receiver and downloader
 - `rubika_worker.py` - Rubika upload worker
-
-## Run with Screen
-
-```bash
-screen -S walrus
-cd /opt/walrus
-source venv/bin/activate
-python main.py
-```
-
-Detach without stopping the app:
-
-```text
-Ctrl + A, then D
-```
-
-Useful commands:
-
-- `screen -ls`
-- `screen -r walrus` - attach to the running session
-- `screen -S walrus -X quit`
-
-If multiple old sessions exist:
-
-```bash
-for s in $(screen -ls | awk '/walrus/ {print $1}'); do
-  screen -S "$s" -X quit
-done
-```
-
-## Update on Server
-
-Typical restart flow:
-
-```bash
-cd /opt/walrus
-git pull origin main
-source venv/bin/activate
-pip install -r requirements.txt
-
-for s in $(screen -ls | awk '/walrus/ {print $1}'); do
-  screen -S "$s" -X quit
-done
-
-screen -dmS walrus bash -lc 'cd /opt/walrus && source venv/bin/activate && python main.py'
-```
-
-Then verify:
-
-```bash
-screen -ls
-```
-
-Optional update script:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-APP_DIR="${APP_DIR:-/opt/walrus}"
-BRANCH="${BRANCH:-main}"
-SCREEN_NAME="${SCREEN_NAME:-walrus}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-VENV_PYTHON="$APP_DIR/venv/bin/python"
-
-echo "==> Updating code"
-cd "$APP_DIR"
-git pull --ff-only origin "$BRANCH"
-
-if [ ! -x "$VENV_PYTHON" ]; then
-  echo "==> Creating virtualenv"
-  "$PYTHON_BIN" -m venv "$APP_DIR/venv" || {
-    echo "Could not create venv. On Ubuntu, install it with: apt update && apt install -y python3-venv"
-    exit 1
-  }
-fi
-
-echo "==> Installing dependencies"
-"$VENV_PYTHON" -m pip install -r requirements.txt
-
-if ! command -v screen >/dev/null 2>&1; then
-  echo "screen is not installed. Install it with: apt update && apt install -y screen"
-  exit 1
-fi
-
-echo "==> Stopping old screen sessions"
-while read -r session; do
-  [ -n "$session" ] || continue
-  screen -S "$session" -X quit || true
-done < <(screen -ls | awk -v name="$SCREEN_NAME" '$0 ~ name {print $1}' || true)
-
-echo "==> Starting app in screen"
-screen -dmS "$SCREEN_NAME" bash -lc "cd '$APP_DIR' && exec '$VENV_PYTHON' main.py"
-
-echo "==> Done"
-echo "Check sessions with: screen -ls"
-echo "Attach with: screen -r $SCREEN_NAME"
-```
-
-The same script is included as `update.sh` in the repo. On a fresh server:
-
-```bash
-cd /opt/walrus
-bash update.sh
-```
 
 ## Troubleshooting
 
