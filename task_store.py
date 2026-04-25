@@ -27,6 +27,27 @@ def ensure_storage_dirs() -> None:
     CANCEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def session_file_candidates(session_name: str) -> list[Path]:
+    base_path = Path(session_name)
+    if not base_path.is_absolute():
+        base_path = BASE_DIR / base_path
+
+    candidates: list[Path] = []
+    for path in (
+        base_path,
+        Path(f"{base_path}.rp"),
+        Path(f"{base_path}.session"),
+        Path(f"{base_path}.sqlite"),
+    ):
+        if path not in candidates:
+            candidates.append(path)
+    return candidates
+
+
+def has_rubika_session(session_name: str) -> bool:
+    return any(path.exists() for path in session_file_candidates(session_name))
+
+
 def safe_filename(name: Optional[str], default: str = "file.bin") -> str:
     name = (name or default).strip()
     name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", name)

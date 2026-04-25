@@ -178,14 +178,9 @@ If you leave it unset, the bot stays open for everyone.
 
 ## Rubika Login Flow
 
-Walrus supports two Rubika login flows:
+Rubika account setup happens in the Telegram bot UI. On first setup, send `/start`; if no saved Rubika session exists yet, the bot will ask for the phone number and OTP code.
 
-1. First run bootstrap:
-   If no saved Rubika session exists yet, the worker may ask in the terminal for the phone number and OTP code.
-2. Account changes later:
-   After the app is already running, you can switch the Rubika account from Telegram.
-
-Telegram-based account setup works like this:
+Account setup and account changes work like this:
 
 1. Open `⚙️ Settings`
 2. Tap `📱 Change Account` or run `/set_rubika`
@@ -199,9 +194,15 @@ After a successful login, the current Rubika session is replaced and reused by t
 
 ## First Run
 
-If the configured Rubika session does not exist yet, the first worker run may ask for:
+If the configured Rubika session does not exist yet, open the Telegram bot and send:
 
-1. Your phone number
+```text
+/start
+```
+
+The bot UI will ask for:
+
+1. Your Rubika phone number
 2. The OTP code sent by Rubika
 
 After that, the saved session is reused unless you later replace it from Telegram.
@@ -239,13 +240,7 @@ screen -ls
 screen -r walrus
 ```
 
-On the first Rubika login, attach to the screen session and enter the phone number and OTP in that terminal:
-
-```bash
-screen -r walrus
-```
-
-Detach without stopping the app with `Ctrl + A`, then `D`.
+First-time Rubika account setup happens in the Telegram bot UI with `/start`, not in the terminal. Detach from screen without stopping the app with `Ctrl + A`, then `D`.
 
 ## Update on Server
 

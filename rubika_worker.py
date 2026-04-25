@@ -19,6 +19,7 @@ from task_store import (
     clear_worker_pid,
     cleanup_local_file,
     ensure_storage_dirs,
+    has_rubika_session,
     human_duration,
     human_speed,
     is_cancelled,
@@ -63,43 +64,17 @@ class RubikaConnectTimeoutError(TimeoutError):
     pass
 
 
-def has_session(session_name: str) -> bool:
-    candidates: list[Path] = []
-    for path in (
-        Path(session_name),
-        Path(f"{session_name}.rp"),
-        Path(f"{session_name}.session"),
-        Path(f"{session_name}.sqlite"),
-    ):
-        if path not in candidates:
-            candidates.append(path)
-    return any(path.exists() for path in candidates)
+class MissingRubikaSessionError(RuntimeError):
+    pass
 
 
-def ensure_session(session_name: str, timeout: int | None = RUBIKA_CONNECT_TIMEOUT) -> None:
-    if has_session(session_name):
+def ensure_session(session_name: str) -> None:
+    if has_rubika_session(session_name):
         return
 
-    async def bootstrap():
-        client = RubikaClient(name=session_name)
-        entered = False
-        try:
-            if timeout is None:
-                await client.__aenter__()
-            else:
-                await asyncio.wait_for(client.__aenter__(), timeout=timeout)
-            entered = True
-            return None
-        except asyncio.TimeoutError as exc:
-            raise RubikaConnectTimeoutError(
-                f"Rubika connection timed out after {timeout}s during session bootstrap."
-            ) from exc
-        finally:
-            if entered:
-                await client.__aexit__(None, None, None)
-
-    asyncio.run(bootstrap())
-    print("Login successful.")
+    raise MissingRubikaSessionError(
+        "Rubika account is not set up. Open the Telegram bot and run /start or /set_rubika."
+    )
 
 
 def resolve_task_settings(task: dict) -> dict:
@@ -708,9 +683,6 @@ def worker_loop():
     atexit.register(clear_worker_pid)
     recover_cancelled_processing_task()
     print("Rubika worker started.")
-    settings = load_runtime_settings()
-    print("Checking Rubika session. If this is the first login, enter the phone number and OTP here.")
-    ensure_session(settings["rubika_session"], timeout=None)
 
     while True:
         task = pop_first_task()

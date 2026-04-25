@@ -32,6 +32,7 @@ from task_store import (
     cleanup_local_file,
     ensure_storage_dirs,
     find_failed_entry,
+    has_rubika_session,
     human_size,
     human_duration,
     human_speed,
@@ -207,6 +208,10 @@ def format_destination_label(settings: dict) -> str:
     return "Saved Messages"
 
 
+def rubika_session_exists() -> bool:
+    return has_rubika_session(load_runtime_settings()["rubika_session"])
+
+
 def settings_action_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -342,7 +347,7 @@ def normalize_phone_number(phone_number: str) -> str:
     return phone
 
 
-async def prompt_rubika_phone_setup(message: Message) -> None:
+async def prompt_rubika_phone_setup(message: Message, first_setup: bool = False) -> None:
     stop_auth_process(message.chat.id)
     await cleanup_auth_temp_messages(message.chat.id)
     clear_auth_setup(message.chat.id)
@@ -352,18 +357,24 @@ async def prompt_rubika_phone_setup(message: Message) -> None:
         "stage": "await_phone",
         "session_name": load_runtime_settings()["rubika_session"],
     }
-    await send_auth_temp_message(
-        message,
-        "\n".join(
+    lines = []
+    if first_setup:
+        lines.extend(
             [
-                "📱 Send the Rubika phone number you want to log in with.",
-                "I will send the OTP request and then ask you for the code here.",
+                "⚠️ No Rubika account is set up yet.",
                 "",
-                "Your current stored Rubika session will be replaced after successful login.",
             ]
-        ),
-        auth_setup_keyboard(),
+        )
+
+    lines.extend(
+        [
+            "📱 Send the Rubika phone number you want to log in with.",
+            "I will send the OTP request and then ask you for the code here.",
+            "",
+            "Your current stored Rubika session will be replaced after successful login.",
+        ]
     )
+    await send_auth_temp_message(message, "\n".join(lines), auth_setup_keyboard())
 
 
 async def cancel_auth_setup(message: Message) -> None:
@@ -1627,6 +1638,9 @@ async def start_handler(client: Client, message: Message):
     if not await ensure_authorized_message(message):
         return
     await ensure_bot_commands(client)
+    if not rubika_session_exists():
+        await prompt_rubika_phone_setup(message, first_setup=True)
+        return
     await send_menu(message)
 
 
