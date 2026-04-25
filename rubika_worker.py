@@ -29,6 +29,7 @@ from task_store import (
     pop_first_task,
     save_worker_pid,
     save_processing,
+    safe_filename,
 )
 
 
@@ -38,6 +39,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 MAX_RETRIES = 5
 RETRY_DELAY = 3
+ERROR_TEXT_LIMIT = 220
 
 ensure_storage_dirs()
 
@@ -247,12 +249,28 @@ def is_transient_upload_error(error_text: str) -> bool:
     return any(
         key in error_text
         for key in [
+            "500",
             "502",
+            "503",
+            "504",
             "bad gateway",
+            "gateway",
+            "service unavailable",
             "timeout",
+            "timed out",
+            "read timed out",
+            "connect timeout",
             "cannot connect",
             "connection reset",
+            "connection aborted",
+            "remote end closed connection",
+            "server disconnected",
+            "broken pipe",
+            "ssl",
+            "protocolerror",
             "temporarily unavailable",
+            "temporary failure",
+            "network is unreachable",
             "error uploading chunk",
         ]
     )
@@ -268,6 +286,22 @@ def wait_with_cancel(task_id: str, seconds: int) -> None:
 def normalize_failed_progress(task: dict) -> None:
     current_percent = int(task.get("upload_percent", 0) or 0)
     task["upload_percent"] = min(current_percent, 99)
+
+
+def compact_error_text(error: Exception | str) -> str:
+    text = " ".join(str(error or "").split()).strip()
+    if not text:
+        return "Unknown upload error."
+    if len(text) <= ERROR_TEXT_LIMIT:
+        return text
+    return text[: ERROR_TEXT_LIMIT - 3].rstrip() + "..."
+
+
+def build_fallback_upload_name(task: dict, file_path: str, current_name: str | None = None) -> str:
+    original_suffix = Path(current_name or file_path).suffix.lower()
+    suffix = original_suffix if original_suffix in MEDIA_EXTENSIONS else ".mp4"
+    task_id = (task.get("task_id") or "file").strip()[:16] or "file"
+    return safe_filename(f"video_{task_id}{suffix}", f"video_{task_id}.mp4")
 
 
 def make_upload_progress_callback(task: dict, attempt: int):
@@ -346,6 +380,8 @@ def send_with_retry(
 ):
     task_id = task.get("task_id", "")
     last_error = None
+    upload_name = file_name or Path(file_path).name
+    used_fallback_name = False
 
     for attempt in range(1, MAX_RETRIES + 1):
         if is_cancelled(task_id):
@@ -371,7 +407,7 @@ def send_with_retry(
                     file_path,
                     caption,
                     callback=make_upload_progress_callback(task, attempt),
-                    file_name=file_name,
+                    file_name=upload_name,
                 )
             )
 
@@ -392,8 +428,13 @@ def send_with_retry(
             save_processing(task)
 
             transient = is_transient_upload_error(error_text)
+            near_complete = int(task.get("upload_percent", 0) or 0) >= 95
 
-            if transient and attempt < MAX_RETRIES:
+            if near_complete and not used_fallback_name:
+                upload_name = build_fallback_upload_name(task, file_path, upload_name)
+                used_fallback_name = True
+
+            if attempt < MAX_RETRIES and (transient or near_complete):
                 delay = RETRY_DELAY * attempt
                 next_attempt_text = f"{attempt + 1} of {MAX_RETRIES}"
                 task["upload_percent"] = 0
@@ -401,10 +442,18 @@ def send_with_retry(
                 task["speed_text"] = None
                 task["eta_text"] = None
                 save_processing(task)
+                reason = (
+                    "temporary network issue"
+                    if transient
+                    else "failure happened near upload completion"
+                )
+                extra = " Retrying with a short safe filename." if near_complete and used_fallback_name else ""
                 update_telegram_status(
                     task,
                     stage="⚠️ Retrying",
-                    upload_status=f"Attempt {attempt} failed. Next retry in {delay}s.",
+                    upload_status=(
+                        f"Attempt {attempt} failed ({reason}). Next retry in {delay}s.{extra}"
+                    ),
                     attempt_text=next_attempt_text,
                 )
                 wait_with_cancel(task_id, delay)
@@ -543,11 +592,14 @@ def worker_loop():
             processing_task["attempt_text"] = f"{MAX_RETRIES} of {MAX_RETRIES}"
             normalize_failed_progress(processing_task)
             save_processing(processing_task)
-            append_failed(processing_task, str(e))
+            error_text = compact_error_text(e)
+            append_failed(processing_task, error_text)
             update_telegram_status(
                 processing_task,
                 stage="❌ Upload Failed",
-                upload_status=f"Failed after {MAX_RETRIES} attempts.",
+                upload_status=(
+                    f"Failed after {MAX_RETRIES} attempts. Last error: {error_text}"
+                ),
                 attempt_text=processing_task.get("attempt_text"),
                 action="retry",
             )
