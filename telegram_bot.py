@@ -1530,17 +1530,22 @@ def download_file_url(
     if scheme not in {"http", "https"}:
         raise RuntimeError("Only http(s):// and file:// video URLs are supported.")
 
-    downloaded = download_path.stat().st_size if download_path.exists() else 0
     last_error: Exception | None = None
 
     for attempt in range(1, DIRECT_DOWNLOAD_MAX_RETRIES + 1):
         if should_cancel():
             raise DirectDownloadCancelled("Cancelled by user.")
 
-        resume_from = download_path.stat().st_size if download_path.exists() else 0
-        headers = {}
-        if resume_from > 0:
-            headers["Range"] = f"bytes={resume_from}-"
+        existing_size = download_path.stat().st_size if download_path.exists() else 0
+        if existing_size > 0:
+            download_path.unlink(missing_ok=True)
+            log_bot_event(
+                task_id,
+                "direct_download_partial_removed",
+                level="WARNING",
+                attempt=attempt,
+                removed_bytes=existing_size,
+            )
 
         try:
             log_bot_event(
@@ -1548,40 +1553,13 @@ def download_file_url(
                 "direct_download_attempt_start",
                 attempt=attempt,
                 max_retries=DIRECT_DOWNLOAD_MAX_RETRIES,
-                resume_from=resume_from,
-                request_headers=headers,
                 url=url,
             )
             with requests.get(
                 url,
                 stream=True,
                 timeout=(15, 120),
-                headers=headers,
             ) as response:
-                if response.status_code == 416 and resume_from > 0:
-                    total = response_total_size(response, 0)
-                    if total > 0 and resume_from >= total:
-                        progress(total, total)
-                        log_bot_event(
-                            task_id,
-                            "direct_download_already_complete",
-                            attempt=attempt,
-                            resume_from=resume_from,
-                            total_bytes=total,
-                        )
-                        return download_path
-                    download_path.unlink(missing_ok=True)
-                    log_bot_event(
-                        task_id,
-                        "direct_download_resume_reset",
-                        level="WARNING",
-                        attempt=attempt,
-                        reason="http_416",
-                        resume_from=resume_from,
-                        total_bytes=total,
-                    )
-                    continue
-
                 response.raise_for_status()
                 log_bot_event(
                     task_id,
@@ -1603,27 +1581,12 @@ def download_file_url(
                 ):
                     raise RuntimeError("The URL must point to a direct video file.")
 
-                if resume_from > 0 and response.status_code != 206:
-                    log_bot_event(
-                        task_id,
-                        "direct_download_resume_reset",
-                        level="WARNING",
-                        attempt=attempt,
-                        reason="server_did_not_honor_range",
-                        resume_from=resume_from,
-                        status_code=response.status_code,
-                    )
-                    resume_from = 0
-                    downloaded = 0
-                    download_path.unlink(missing_ok=True)
-
-                total = response_total_size(response, resume_from)
+                total = response_total_size(response, 0)
                 if total > 0:
-                    progress(resume_from, total)
+                    progress(0, total)
 
-                downloaded = resume_from
-                mode = "ab" if resume_from > 0 else "wb"
-                with download_path.open(mode) as target:
+                downloaded = 0
+                with download_path.open("wb") as target:
                     for chunk in response.iter_content(chunk_size=1024 * 256):
                         if should_cancel():
                             log_bot_event(task_id, "direct_download_cancelled", level="WARNING")

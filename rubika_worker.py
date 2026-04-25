@@ -320,61 +320,71 @@ async def send_document(
             },
         )
         inline_type = rubika_inline_type(task, file_path, upload_name)
-        file_inline.update(
-            {
-                "type": inline_type,
-                "time": 1,
-                "width": 200,
-                "height": 200,
-                "music_performer": "",
-                "is_spoil": False,
-            }
-        )
+        finalize_variants = build_file_inline_variants(file_inline, inline_type)
 
         last_error = None
-        for attempt in range(1, RUBIKA_FINALIZE_RETRIES + 1):
-            log_worker_event(
-                task,
-                "rubika_finalize_start",
-                finalize_attempt=attempt,
-                finalize_retries=RUBIKA_FINALIZE_RETRIES,
-                file_inline={
-                    key: file_inline.get(key)
-                    for key in ("mime", "size", "dc_id", "file_id", "file_name", "type")
-                },
-            )
-            try:
-                result = await client.send_message(
-                    object_guid=target,
-                    text=caption.strip() if caption and caption.strip() else None,
-                    file_inline=file_inline,
-                )
+        for strategy, candidate_file_inline in finalize_variants:
+            for attempt in range(1, RUBIKA_FINALIZE_RETRIES + 1):
                 log_worker_event(
                     task,
-                    "rubika_finalize_ok",
+                    "rubika_finalize_start",
                     finalize_attempt=attempt,
-                    result_type=type(result).__name__,
+                    finalize_retries=RUBIKA_FINALIZE_RETRIES,
+                    finalize_strategy=strategy,
+                    file_inline={
+                        key: candidate_file_inline.get(key)
+                        for key in ("mime", "size", "dc_id", "file_id", "file_name", "type")
+                    },
                 )
-                return result
-            except Exception as error:
-                last_error = error
-                error_text = compact_error_text(error)
-                transient = is_transient_upload_error(error_text.lower())
-                log_worker_event(
-                    task,
-                    "rubika_finalize_error",
-                    level="WARNING" if transient and attempt < RUBIKA_FINALIZE_RETRIES else "ERROR",
-                    finalize_attempt=attempt,
-                    error=error_text,
-                    error_type=type(error).__name__,
-                    transient=transient,
-                    traceback=traceback.format_exc(limit=6),
-                )
-                if attempt >= RUBIKA_FINALIZE_RETRIES:
+                try:
+                    result = await client.send_message(
+                        object_guid=target,
+                        text=caption.strip() if caption and caption.strip() else None,
+                        file_inline=candidate_file_inline,
+                    )
+                    log_worker_event(
+                        task,
+                        "rubika_finalize_ok",
+                        finalize_attempt=attempt,
+                        finalize_strategy=strategy,
+                        result_type=type(result).__name__,
+                    )
+                    return result
+                except Exception as error:
+                    last_error = error
+                    error_text = compact_error_text(error)
+                    transient = is_transient_upload_error(error_text.lower())
+                    try_next_strategy = (
+                        not transient
+                        and attempt == 1
+                        and strategy != finalize_variants[-1][0]
+                    )
+                    log_worker_event(
+                        task,
+                        "rubika_finalize_error",
+                        level=(
+                            "WARNING"
+                            if try_next_strategy or (transient and attempt < RUBIKA_FINALIZE_RETRIES)
+                            else "ERROR"
+                        ),
+                        finalize_attempt=attempt,
+                        finalize_strategy=strategy,
+                        error=error_text,
+                        error_type=type(error).__name__,
+                        transient=transient,
+                        try_next_strategy=try_next_strategy,
+                        traceback=traceback.format_exc(limit=6),
+                    )
+                    if try_next_strategy:
+                        break
+                    if attempt >= RUBIKA_FINALIZE_RETRIES:
+                        break
+                    if not transient:
+                        break
+                    await asyncio.sleep(RUBIKA_FINALIZE_RETRY_DELAY * attempt)
+
+                if last_error and not transient:
                     break
-                if not transient:
-                    break
-                await asyncio.sleep(RUBIKA_FINALIZE_RETRY_DELAY * attempt)
 
         raise last_error if last_error else RuntimeError("Rubika finalization failed.")
     finally:
@@ -471,6 +481,28 @@ def rubika_inline_type(task: dict, file_path: str, file_name: str | None = None)
     if media_type in {"audio", "voice"} or suffix in {".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac"}:
         return "Music"
     return "File"
+
+
+def build_file_inline_payload(uploaded_file: dict, inline_type: str) -> dict:
+    payload = dict(uploaded_file)
+    payload.update(
+        {
+            "type": inline_type,
+            "time": 1,
+            "width": 200,
+            "height": 200,
+            "music_performer": "",
+            "is_spoil": False,
+        }
+    )
+    return payload
+
+
+def build_file_inline_variants(uploaded_file: dict, preferred_type: str) -> list[tuple[str, dict]]:
+    variants = [(preferred_type.lower(), build_file_inline_payload(uploaded_file, preferred_type))]
+    if preferred_type != "File":
+        variants.append(("file", build_file_inline_payload(uploaded_file, "File")))
+    return variants
 
 
 def make_upload_progress_callback(task: dict, attempt: int):
