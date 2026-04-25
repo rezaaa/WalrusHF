@@ -98,6 +98,7 @@ DIRECT_VIDEO_EXTENSIONS = {
 URL_PATTERN = re.compile(r"(?P<url>(?:https?|file)://\S+)", re.IGNORECASE)
 DIRECT_DOWNLOAD_MAX_RETRIES = 5
 DIRECT_DOWNLOAD_RETRY_DELAY = 3
+PROCESSING_ACTIVE_HEARTBEAT_SECONDS = 120
 
 MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -210,6 +211,32 @@ def format_destination_label(settings: dict) -> str:
 
 def rubika_session_exists() -> bool:
     return has_rubika_session(load_runtime_settings()["rubika_session"])
+
+
+def worker_process_is_alive() -> bool:
+    pid = load_worker_pid()
+    if not pid:
+        return False
+
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def processing_task_is_active(task: dict | None) -> bool:
+    if not task or cancel_requested(task):
+        return False
+
+    updated_at = float(task.get("processing_updated_at") or 0)
+    if updated_at <= 0:
+        return False
+
+    if time.time() - updated_at > PROCESSING_ACTIVE_HEARTBEAT_SECONDS:
+        return False
+
+    return worker_process_is_alive()
 
 
 def settings_action_keyboard() -> InlineKeyboardMarkup:
@@ -410,7 +437,7 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
 
     session_name = load_runtime_settings()["rubika_session"]
     processing_task = load_processing()
-    if processing_task and has_rubika_session(session_name):
+    if processing_task_is_active(processing_task) and has_rubika_session(session_name):
         await cleanup_auth_input_message(message)
         await cleanup_auth_temp_messages(message.chat.id)
         await send_settings_panel(
@@ -766,7 +793,7 @@ def visible_active_downloads() -> list[dict]:
 
 def visible_processing_task() -> dict | None:
     processing_task = load_processing()
-    if cancel_requested(processing_task):
+    if not processing_task_is_active(processing_task):
         return None
     return processing_task
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import unicodedata
 from html import escape
 from pathlib import Path
@@ -323,6 +324,7 @@ def pop_first_task() -> Optional[dict]:
 
 
 def save_processing(task: dict) -> None:
+    task["processing_updated_at"] = time.time()
     temp_path = PROCESSING_FILE.with_suffix(".tmp")
     with open(temp_path, "w", encoding="utf-8") as file:
         json.dump(task, file, ensure_ascii=False, indent=2)
