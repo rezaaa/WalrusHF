@@ -408,8 +408,9 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
         )
         return
 
+    session_name = load_runtime_settings()["rubika_session"]
     processing_task = load_processing()
-    if processing_task:
+    if processing_task and has_rubika_session(session_name):
         await cleanup_auth_input_message(message)
         await cleanup_auth_temp_messages(message.chat.id)
         await send_settings_panel(
@@ -420,7 +421,6 @@ async def start_rubika_auth_process(message: Message, phone_number: str) -> None
         return
 
     stop_auth_process(message.chat.id)
-    session_name = load_runtime_settings()["rubika_session"]
     try:
         process = subprocess.Popen(
             [sys.executable, str(RUBIKA_AUTH_HELPER), session_name, normalized_phone],
