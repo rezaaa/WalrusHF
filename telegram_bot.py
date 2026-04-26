@@ -600,10 +600,17 @@ def stop_auth_process(chat_id: int) -> None:
 def normalize_phone_number(phone_number: str) -> str:
     phone = re.sub(r"[^\d+]", "", phone_number.strip())
     if phone.startswith("00"):
-        phone = f"+{phone[2:]}"
-    if phone.startswith("+"):
-        return phone
-    return phone
+        phone = phone[2:]
+    elif phone.startswith("+"):
+        phone = phone[1:]
+
+    if phone.startswith("0"):
+        phone = f"98{phone[1:]}"
+
+    if not re.fullmatch(r"\d{7,15}", phone):
+        raise ValueError("Invalid phone number.")
+
+    return f"+{phone}"
 
 
 async def prompt_rubika_phone_setup(message: Message, first_setup: bool = False) -> None:

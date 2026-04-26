@@ -122,7 +122,9 @@ def normalize_phone_number(phone_number: str) -> str:
         raise ValueError("Invalid phone number.")
 
     normalized = match.group(1)
-    return f"98{normalized[1:]}" if normalized.startswith("0") else normalized
+    if normalized.startswith("0"):
+        normalized = f"98{normalized[1:]}"
+    return f"+{normalized}"
 
 
 def read_user_input(error_message: str) -> str:
