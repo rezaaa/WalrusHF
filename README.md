@@ -1,6 +1,6 @@
 # Walrus
 
-Send a file to a Telegram bot and have it uploaded to Rubika Saved Messages.
+Walrus is a Telegram bot that downloads files from Telegram or direct links and uploads them to Rubika. It is built for personal file transfer workflows where you want Telegram as the control panel and Rubika as the destination.
 
 ## Disclaimer
 
