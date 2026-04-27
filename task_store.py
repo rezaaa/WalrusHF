@@ -20,6 +20,15 @@ CANCEL_DIR = QUEUE_DIR / "cancelled"
 WORKER_PID_FILE = QUEUE_DIR / "rub_worker.pid"
 SETTINGS_FILE = QUEUE_DIR / "settings.json"
 LRM = "\u200e"
+FILENAME_MAX_BYTES = 200
+WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{number}" for number in range(1, 10)),
+    *(f"LPT{number}" for number in range(1, 10)),
+}
 
 
 def ensure_storage_dirs() -> None:
@@ -49,41 +58,93 @@ def has_rubika_session(session_name: str) -> bool:
     return any(path.exists() for path in session_file_candidates(session_name))
 
 
+def _trim_utf8_bytes(text: str, max_bytes: int) -> str:
+    while text and len(text.encode("utf-8")) > max_bytes:
+        text = text[:-1]
+    return text
+
+
+def _clean_filename_part(text: str, allow_dot: bool = False) -> str:
+    cleaned_chars: list[str] = []
+    allowed_punctuation = "_-()[]{}"
+    if allow_dot:
+        allowed_punctuation += "."
+
+    for char in text:
+        category = unicodedata.category(char)
+        if category[0] in {"L", "N", "M"}:
+            cleaned_chars.append(char)
+            continue
+        if category == "Zs" or char in allowed_punctuation:
+            cleaned_chars.append(" " if category == "Zs" else char)
+            continue
+        cleaned_chars.append(" ")
+
+    cleaned = "".join(cleaned_chars)
+    cleaned = re.sub(r"\s*\.\s*", ".", cleaned)
+    cleaned = re.sub(r"[\s_-]+", " ", cleaned)
+    return cleaned.strip(" .-_")
+
+
+def _clean_extension(suffix: str, default: str) -> str:
+    fallback = Path(default).suffix.lower() or ".bin"
+    suffix = unicodedata.normalize("NFKC", suffix or "").strip().lower()
+    suffix = re.sub(r"[^.\w]", "", suffix, flags=re.UNICODE)
+    if not suffix.startswith("."):
+        suffix = f".{suffix}" if suffix else fallback
+    suffix = suffix.rstrip(".")
+    return suffix[:20] if len(suffix) > 1 else fallback
+
+
+def _avoid_reserved_filename(stem: str) -> str:
+    if stem.upper() in WINDOWS_RESERVED_FILENAMES:
+        return f"{stem} file"
+    return stem
+
+
+def _limit_filename_bytes(stem: str, suffix: str, default: str) -> str:
+    suffix_bytes = len(suffix.encode("utf-8"))
+    max_stem_bytes = max(1, FILENAME_MAX_BYTES - suffix_bytes)
+    stem = _trim_utf8_bytes(stem, max_stem_bytes).strip(" .-_")
+    if not stem:
+        stem = _clean_filename_part(split_name(default)[0]) or "file"
+    return f"{stem}{suffix}"
+
+
 def safe_filename(name: Optional[str], default: str = "file.bin") -> str:
-    name = (name or default).strip()
-    name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", name)
-    name = name.rstrip(". ")
-    return name[:200] or default
+    normalized = unicodedata.normalize("NFKC", (name or "").strip())
+    stem, suffix = split_name(normalized or default)
+    fallback_stem, fallback_suffix = split_name(default)
+
+    if suffix or fallback_suffix:
+        suffix = _clean_extension(suffix or fallback_suffix, default)
+    else:
+        suffix = ""
+
+    fallback_stem = _clean_filename_part(fallback_stem, allow_dot=True) or "file"
+    safe_stem = _clean_filename_part(stem, allow_dot=True) or fallback_stem
+    safe_stem = _avoid_reserved_filename(safe_stem)
+    filename = _limit_filename_bytes(safe_stem, suffix, f"{fallback_stem}{suffix}")
+    return filename or f"{fallback_stem}{suffix}"
 
 
 def normalize_upload_filename(name: Optional[str], default: str = "file.bin") -> str:
     normalized = unicodedata.normalize("NFKC", (name or "").strip())
     stem, suffix = split_name(normalized or default)
-    suffix = safe_filename((suffix or Path(default).suffix or ".bin").lower(), ".bin")
+    fallback_stem, fallback_suffix = split_name(default)
 
-    cleaned_chars: list[str] = []
-    for char in stem:
-        category = unicodedata.category(char)
-        if category[0] in {"L", "N", "M"}:
-            cleaned_chars.append(char)
-            continue
-        if category == "Zs" or char in "._-()[]{} ":
-            cleaned_chars.append(" " if category == "Zs" else char)
-            continue
-        cleaned_chars.append(" ")
-
-    cleaned_stem = "".join(cleaned_chars)
-    cleaned_stem = re.sub(r"[_-]+", " ", cleaned_stem)
-    cleaned_stem = re.sub(r"\s*\.\s*", ".", cleaned_stem)
-    cleaned_stem = re.sub(r"\s+", " ", cleaned_stem).strip(" .-_")
-
-    fallback_stem = split_name(default)[0] or "file"
-    safe_stem = safe_filename(cleaned_stem or fallback_stem, fallback_stem)
-    return safe_filename(f"{safe_stem}{suffix}", f"{fallback_stem}{suffix}")
+    suffix = _clean_extension(suffix or fallback_suffix, default)
+    cleaned_stem = _clean_filename_part(stem, allow_dot=True)
+    fallback_stem = _clean_filename_part(fallback_stem, allow_dot=True) or "file"
+    safe_stem = _avoid_reserved_filename(cleaned_stem or fallback_stem)
+    filename = _limit_filename_bytes(safe_stem, suffix, f"{fallback_stem}{suffix}")
+    return filename or f"{fallback_stem}{suffix}"
 
 
 def split_name(filename: str) -> tuple[str, str]:
-    path = Path(filename)
+    normalized = unicodedata.normalize("NFKC", str(filename or ""))
+    path = Path(normalized.replace("\\", "/")).name
+    path = Path(path)
     return path.stem, path.suffix
 
 

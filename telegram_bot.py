@@ -1948,7 +1948,7 @@ async def queue_downloaded_file(
     if source_url:
         task["source_url"] = source_url
     if upload_file_name:
-        task["upload_file_name"] = safe_filename(
+        task["upload_file_name"] = normalize_upload_filename(
             upload_file_name,
             downloaded_path.name,
         )
