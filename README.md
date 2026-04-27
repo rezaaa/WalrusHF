@@ -24,7 +24,7 @@ You are responsible for using it in a way that respects platform rules, local la
 - Shows total elapsed transfer time on successful uploads
 - Lets you switch the active Rubika number/session from Telegram
 - Lets you choose the upload destination from Telegram
-- Supports Rubika Saved Messages and recent Rubika channels as destinations
+- Supports `Rubika Saved Messages` and recent `Rubika channels` as destinations
 - Uploads files with a sanitized, readable version of their original filename
 
 ## Requirements
