@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 import subprocess
 import sys
@@ -223,14 +224,22 @@ def dashboard_text() -> tuple[str, str]:
     return status, logs
 
 
-def render_dashboard() -> bytes:
+def dashboard_payload() -> dict:
     status, logs = dashboard_text()
+    return {
+        "status": status,
+        "logs": logs,
+        "updated_at": time.strftime("%H:%M:%S"),
+    }
+
+
+def render_dashboard() -> bytes:
+    payload = dashboard_payload()
     page = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="10">
   <title>Walrus Telegram Bot</title>
   <style>
     :root {{
@@ -241,6 +250,7 @@ def render_dashboard() -> bytes:
       --text: #f3f7f5;
       --muted: #9ba8a3;
       --accent: #79d69e;
+      --warn: #f6c66a;
     }}
     body {{
       margin: 0;
@@ -261,6 +271,28 @@ def render_dashboard() -> bytes:
     p {{
       color: var(--muted);
       margin: 0 0 24px;
+    }}
+    .topline {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 24px;
+    }}
+    .topline p {{
+      margin: 0;
+    }}
+    .live {{
+      flex: 0 0 auto;
+      color: var(--accent);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .live[data-state="stale"] {{
+      color: var(--warn);
     }}
     section {{
       border: 1px solid var(--line);
@@ -292,16 +324,45 @@ def render_dashboard() -> bytes:
 <body>
   <main>
     <h1>Walrus Telegram Bot</h1>
-    <p>This Space keeps the Telegram bot and Rubika upload worker running. Use Telegram as the control panel.</p>
+    <div class="topline">
+      <p>This Space keeps the Telegram bot and Rubika upload worker running. Use Telegram as the control panel.</p>
+      <span id="live" class="live">Live</span>
+    </div>
     <section>
       <h2>Status</h2>
-      <pre>{html.escape(status)}</pre>
+      <pre id="status">{html.escape(payload["status"])}</pre>
     </section>
     <section>
       <h2>Logs</h2>
-      <pre>{html.escape(logs)}</pre>
+      <pre id="logs">{html.escape(payload["logs"])}</pre>
     </section>
+    <noscript>
+      <p>JavaScript is disabled. Refresh the page to update status.</p>
+    </noscript>
   </main>
+  <script>
+    const statusEl = document.getElementById("status");
+    const logsEl = document.getElementById("logs");
+    const liveEl = document.getElementById("live");
+
+    async function refreshDashboard() {{
+      try {{
+        const response = await fetch("/status.json", {{ cache: "no-store" }});
+        if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+        const data = await response.json();
+        statusEl.textContent = data.status || "";
+        logsEl.textContent = data.logs || "";
+        liveEl.textContent = `Live · ${{data.updated_at || "--:--:--"}}`;
+        liveEl.dataset.state = "live";
+      }} catch (error) {{
+        liveEl.textContent = "Live paused";
+        liveEl.dataset.state = "stale";
+      }}
+    }}
+
+    refreshDashboard();
+    setInterval(refreshDashboard, 2000);
+  </script>
 </body>
 </html>
 """
@@ -312,6 +373,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def send_body(self, body: bytes, content_type: str) -> None:
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -320,6 +382,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/health":
             self.send_body(b"ok\n", "text/plain; charset=utf-8")
+            return
+        if path == "/status.json":
+            self.send_body(
+                json.dumps(dashboard_payload()).encode("utf-8"),
+                "application/json; charset=utf-8",
+            )
             return
 
         self.send_body(render_dashboard(), "text/html; charset=utf-8")
