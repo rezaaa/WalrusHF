@@ -114,7 +114,11 @@ def required_env_status() -> list[str]:
         "API_HASH": os.getenv("API_HASH", "").strip(),
         "BOT_TOKEN": os.getenv("BOT_TOKEN", "").strip(),
     }
-    return [name for name, value in checks.items() if not value or value == "0"]
+    missing = []
+    for name, value in checks.items():
+        if not value or value == "0" or value == name or value.startswith("your_"):
+            missing.append(name)
+    return missing
 
 
 def supervisor_loop() -> None:

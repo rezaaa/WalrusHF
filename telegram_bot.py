@@ -62,19 +62,33 @@ from task_store import (
 
 load_dotenv()
 
-API_ID = int(os.getenv("API_ID", "0"))
+def env_int(name: str, default: int = 0) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(
+            f"Warning: ignoring invalid integer value for {name}: {raw!r}",
+            flush=True,
+        )
+        return default
+
+
+API_ID = env_int("API_ID")
 API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-OWNER_TELEGRAM_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
-RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
+OWNER_TELEGRAM_ID = env_int("OWNER_TELEGRAM_ID")
+RUBIKA_CONNECT_TIMEOUT = env_int("RUBIKA_CONNECT_TIMEOUT", 25)
 TELEGRAM_SESSION = str(
     runtime_path(
         os.getenv("TELEGRAM_SESSION", "walrus").strip() or "walrus",
         SESSION_DIR,
     )
 )
-MAX_FILE_BYTES = int(os.getenv("WALRUS_MAX_FILE_BYTES", str(8 * 1024 * 1024 * 1024)) or 0)
-MIN_FREE_BYTES = int(os.getenv("WALRUS_MIN_FREE_BYTES", str(512 * 1024 * 1024)) or 0)
+MAX_FILE_BYTES = env_int("WALRUS_MAX_FILE_BYTES", 8 * 1024 * 1024 * 1024)
+MIN_FREE_BYTES = env_int("WALRUS_MIN_FREE_BYTES", 512 * 1024 * 1024)
 ALLOW_FILE_URLS = os.getenv("WALRUS_ALLOW_FILE_URLS", "").strip().lower() in {"1", "true", "yes"}
 
 ensure_storage_dirs()
