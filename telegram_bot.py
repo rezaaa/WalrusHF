@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import signal
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -29,6 +30,7 @@ import requests
 
 from task_store import (
     DOWNLOAD_DIR,
+    SESSION_DIR,
     apply_runtime_settings,
     append_task,
     build_status_text,
@@ -51,6 +53,7 @@ from task_store import (
     read_failed_entries,
     read_queue_tasks,
     remove_queued_task,
+    runtime_path,
     safe_filename,
     save_runtime_settings,
     split_name,
@@ -64,13 +67,21 @@ API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OWNER_TELEGRAM_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
 RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
-TELEGRAM_SESSION = os.getenv("TELEGRAM_SESSION", "walrus").strip() or "walrus"
+TELEGRAM_SESSION = str(
+    runtime_path(
+        os.getenv("TELEGRAM_SESSION", "walrus").strip() or "walrus",
+        SESSION_DIR,
+    )
+)
+MAX_FILE_BYTES = int(os.getenv("WALRUS_MAX_FILE_BYTES", str(8 * 1024 * 1024 * 1024)) or 0)
+MIN_FREE_BYTES = int(os.getenv("WALRUS_MIN_FREE_BYTES", str(512 * 1024 * 1024)) or 0)
+ALLOW_FILE_URLS = os.getenv("WALRUS_ALLOW_FILE_URLS", "").strip().lower() in {"1", "true", "yes"}
 
 ensure_storage_dirs()
 
 
 if not API_ID or not API_HASH or not BOT_TOKEN:
-    raise RuntimeError("Please set API_ID, API_HASH and BOT_TOKEN in .env")
+    raise RuntimeError("Please set API_ID, API_HASH and BOT_TOKEN as Space secrets.")
 
 app = Client(
     TELEGRAM_SESSION,
@@ -257,9 +268,7 @@ def rubika_session_exists() -> bool:
 
 
 def rubika_session_phone(session_name: str) -> str | None:
-    candidates = [Path(session_name)]
-    if not candidates[0].is_absolute():
-        candidates[0] = BASE_DIR / candidates[0]
+    candidates = [runtime_path(session_name, SESSION_DIR)]
     candidates.append(Path(f"{candidates[0]}.rp"))
 
     for path in candidates:
@@ -1438,6 +1447,32 @@ def is_supported_file_content_type(content_type: str) -> bool:
     )
 
 
+def max_file_size_text() -> str:
+    return human_size(MAX_FILE_BYTES) if MAX_FILE_BYTES > 0 else "unlimited"
+
+
+def ensure_file_size_allowed(file_size: int, context: str = "file") -> None:
+    if MAX_FILE_BYTES > 0 and file_size > MAX_FILE_BYTES:
+        raise RuntimeError(
+            f"The {context} is too large for this Space limit "
+            f"({human_size(file_size)} > {max_file_size_text()})."
+        )
+
+
+def ensure_download_space(expected_size: int = 0) -> None:
+    try:
+        usage = shutil.disk_usage(DOWNLOAD_DIR)
+    except OSError:
+        return
+
+    needed = max(0, expected_size) + max(0, MIN_FREE_BYTES)
+    if needed > 0 and usage.free < needed:
+        raise RuntimeError(
+            "Not enough Space disk available for this transfer "
+            f"({human_size(usage.free)} free, need about {human_size(needed)})."
+        )
+
+
 def build_url_download_filename(url: str, task_id: str, fallback_suffix: str = ".bin") -> str:
     original_name = normalize_upload_filename(path_name_from_url(url), f"file{fallback_suffix}")
     stem, suffix = split_name(original_name or "file")
@@ -1826,6 +1861,8 @@ def download_file_url(
     scheme = parsed.scheme.lower()
 
     if scheme == "file":
+        if not ALLOW_FILE_URLS:
+            raise RuntimeError("file:// URLs are disabled in this Hugging Face Space.")
         source_path = Path(unquote(parsed.path or ""))
         if not source_path.exists() or not source_path.is_file():
             raise RuntimeError("Local file URL not found.")
@@ -1833,6 +1870,8 @@ def download_file_url(
             raise RuntimeError("The file URL must point to a supported file type.")
 
         total = source_path.stat().st_size
+        ensure_file_size_allowed(total, "local file")
+        ensure_download_space(total)
         copied = 0
         progress(0, total)
         with source_path.open("rb") as source, download_path.open("wb") as target:
@@ -1849,7 +1888,7 @@ def download_file_url(
         return download_path
 
     if scheme not in {"http", "https"}:
-        raise RuntimeError("Only http(s):// and file:// file URLs are supported.")
+        raise RuntimeError("Only http(s):// direct file URLs are supported in this Space.")
 
     last_error: Exception | None = None
 
@@ -1879,6 +1918,8 @@ def download_file_url(
 
                 total = response_total_size(response, 0)
                 if total > 0:
+                    ensure_file_size_allowed(total, "direct URL file")
+                    ensure_download_space(total)
                     progress(0, total)
 
                 downloaded = 0
@@ -1890,6 +1931,7 @@ def download_file_url(
                             continue
                         target.write(chunk)
                         downloaded += len(chunk)
+                        ensure_file_size_allowed(downloaded, "direct URL file")
                         progress(downloaded, total)
 
                 if total > 0 and downloaded < total:
@@ -2465,6 +2507,16 @@ async def media_handler(client: Client, message: Message):
     download_path = DOWNLOAD_DIR / file_name
     started_at = time.time()
     runtime_settings = load_runtime_settings()
+
+    try:
+        if file_size > 0:
+            ensure_file_size_allowed(file_size, "Telegram file")
+            ensure_download_space(file_size)
+        else:
+            ensure_download_space()
+    except RuntimeError as error:
+        await message.reply_text(f"⚠️ {error}", reply_markup=MENU_KEYBOARD)
+        return
 
     status = await message.reply_text(
         build_status_text(

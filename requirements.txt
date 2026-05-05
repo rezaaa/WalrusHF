@@ -2,4 +2,5 @@ pyrogram==2.0.106
 tgcrypto==1.2.5
 rubpy==7.3.4
 python-dotenv==1.2.2
-requests==2.25.1
+requests>=2.32.3,<3
+gradio>=4.44,<6

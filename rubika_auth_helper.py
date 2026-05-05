@@ -9,6 +9,8 @@ import signal
 import sys
 from pathlib import Path
 
+from task_store import session_base_name
+
 
 BACKUP_PATHS: list[tuple[Path, Path]] = []
 BACKUP_DIR: Path | None = None
@@ -16,10 +18,7 @@ RESTORED = False
 
 
 def session_base_path(session_name: str) -> Path:
-    path = Path(session_name)
-    if path.parent == Path(""):
-        return Path.cwd() / path.name
-    return path
+    return Path(session_base_name(session_name))
 
 
 def session_candidates(session_name: str) -> list[Path]:

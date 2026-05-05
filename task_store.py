@@ -11,8 +11,21 @@ from typing import Callable, Optional
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DOWNLOAD_DIR = BASE_DIR / "downloads"
-QUEUE_DIR = BASE_DIR / "queue"
+
+
+def default_data_dir() -> Path:
+    configured = os.getenv("WALRUS_DATA_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    if Path("/data").exists():
+        return Path("/data/walrus")
+    return Path("/tmp/walrus")
+
+
+DATA_DIR = default_data_dir()
+SESSION_DIR = DATA_DIR / "sessions"
+DOWNLOAD_DIR = DATA_DIR / "downloads"
+QUEUE_DIR = DATA_DIR / "queue"
 QUEUE_FILE = QUEUE_DIR / "tasks.jsonl"
 PROCESSING_FILE = QUEUE_DIR / "processing.json"
 FAILED_FILE = QUEUE_DIR / "failed.jsonl"
@@ -32,15 +45,29 @@ WINDOWS_RESERVED_FILENAMES = {
 
 
 def ensure_storage_dirs() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     CANCEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def runtime_path(name_or_path: str | Path, base_dir: Path = SESSION_DIR) -> Path:
+    path = Path(str(name_or_path)).expanduser()
+    if path.is_absolute():
+        return path
+    return base_dir / path
+
+
+def session_base_name(session_name: str | Path) -> str:
+    path = runtime_path(session_name, SESSION_DIR)
+    if path.suffix in {".rp", ".session", ".sqlite"}:
+        path = path.with_suffix("")
+    return str(path)
+
+
 def session_file_candidates(session_name: str) -> list[Path]:
-    base_path = Path(session_name)
-    if not base_path.is_absolute():
-        base_path = BASE_DIR / base_path
+    base_path = Path(session_base_name(session_name))
 
     candidates: list[Path] = []
     for path in (
@@ -263,14 +290,27 @@ def build_status_text(
 
 
 def env_runtime_settings() -> dict:
-    default_session = os.getenv("RUBIKA_SESSION", "rubika_session").strip() or "rubika_session"
+    default_session = os.getenv("RUBIKA_SESSION", "").strip()
+    if default_session:
+        default_session = session_base_name(default_session)
+    else:
+        default_session = str(SESSION_DIR / "rubika_session")
     default_phone = os.getenv("RUBIKA_PHONE", "").strip()
+    default_target = os.getenv("RUBIKA_TARGET", "me").strip() or "me"
+    default_target_title = os.getenv(
+        "RUBIKA_TARGET_TITLE",
+        "Saved Messages" if default_target == "me" else "Rubika Destination",
+    ).strip()
+    default_target_type = os.getenv(
+        "RUBIKA_TARGET_TYPE",
+        "saved" if default_target == "me" else "custom",
+    ).strip()
     return {
         "rubika_session": default_session,
         "rubika_phone": default_phone,
-        "rubika_target": "me",
-        "rubika_target_title": "Saved Messages",
-        "rubika_target_type": "saved",
+        "rubika_target": default_target,
+        "rubika_target_title": default_target_title,
+        "rubika_target_type": default_target_type,
     }
 
 
@@ -282,6 +322,7 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
         str(settings.get("rubika_session") or defaults["rubika_session"]).strip()
         or defaults["rubika_session"]
     )
+    rubika_session = session_base_name(rubika_session)
     rubika_phone = str(settings.get("rubika_phone") or defaults["rubika_phone"]).strip()
     rubika_target = (
         str(
@@ -294,6 +335,7 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
     rubika_target_title = (
         str(
             settings.get("rubika_target_title")
+            or defaults["rubika_target_title"]
             or ("Saved Messages" if rubika_target == "me" else "Rubika Channel")
         ).strip()
         or defaults["rubika_target_title"]
@@ -301,6 +343,7 @@ def normalize_runtime_settings(settings: Optional[dict] = None) -> dict:
     rubika_target_type = (
         str(
             settings.get("rubika_target_type")
+            or defaults["rubika_target_type"]
             or ("saved" if rubika_target == "me" else "channel")
         ).strip()
         or defaults["rubika_target_type"]
