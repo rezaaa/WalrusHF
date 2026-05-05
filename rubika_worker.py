@@ -37,6 +37,7 @@ from task_store import (
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+RUBIKA_BOT_TOKEN = os.getenv("RUBIKA_BOT_TOKEN", "").strip()
 
 MAX_RETRIES = 5
 RETRY_DELAY = 3
@@ -44,6 +45,7 @@ ERROR_TEXT_LIMIT = 220
 RUBIKA_CONNECT_TIMEOUT = int(os.getenv("RUBIKA_CONNECT_TIMEOUT", "25") or 25)
 RUBIKA_FINALIZE_RETRIES = int(os.getenv("RUBIKA_FINALIZE_RETRIES", "3") or 3)
 RUBIKA_FINALIZE_RETRY_DELAY = float(os.getenv("RUBIKA_FINALIZE_RETRY_DELAY", "2") or 2)
+RUBIKA_BOT_API_TIMEOUT = int(os.getenv("RUBIKA_BOT_API_TIMEOUT", "60") or 60)
 
 ensure_storage_dirs()
 
@@ -68,6 +70,10 @@ class RubikaConnectTimeoutError(TimeoutError):
 
 
 class MissingRubikaSessionError(RuntimeError):
+    pass
+
+
+class RubikaBotApiError(RuntimeError):
     pass
 
 
@@ -227,6 +233,23 @@ def notify_transfer_complete(task: dict, elapsed_text: str | None, settings: dic
     if elapsed_text:
         lines.append(f"⏱ <b>Time:</b> <code>{escape(elapsed_text)}</code>")
 
+    download_url = str(task.get("rubika_download_url") or "").strip()
+    if download_url:
+        lines.extend(
+            [
+                "",
+                f"📥 <b>Download:</b> {escape(download_url)}",
+            ]
+        )
+    elif task.get("rubika_download_error"):
+        lines.extend(
+            [
+                "",
+                "⚠️ <b>Download link:</b> unavailable.",
+                f"<code>{escape(str(task['rubika_download_error']))}</code>",
+            ]
+        )
+
     send_telegram_message(
         int(chat_id),
         "\n".join(lines),
@@ -300,6 +323,86 @@ async def send_document(
     finally:
         if entered:
             await client.__aexit__(None, None, None)
+
+
+def rubika_bot_api(method: str, payload: dict, timeout: int | None = None) -> dict:
+    if not RUBIKA_BOT_TOKEN:
+        raise RubikaBotApiError("RUBIKA_BOT_TOKEN is not configured.")
+
+    response = requests.post(
+        f"https://botapi.rubika.ir/v3/{RUBIKA_BOT_TOKEN}/{method}",
+        json=payload,
+        timeout=timeout or RUBIKA_BOT_API_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+    if data.get("status") != "OK":
+        detail = data.get("dev_message") or data.get("message") or data.get("status")
+        raise RubikaBotApiError(f"{method} failed: {detail}")
+
+    result = data.get("data")
+    return result if isinstance(result, dict) else {}
+
+
+def rubika_bot_file_type(task: dict, file_path: str, file_name: str | None = None) -> str:
+    inline_type = rubika_inline_type(task, file_path, file_name)
+    return inline_type if inline_type in {"File", "Image", "Voice", "Music", "Gif", "Video"} else "File"
+
+
+def upload_file_to_rubika_bot_api(
+    target: str,
+    file_path: str,
+    caption: str = "",
+    file_name: str | None = None,
+    task: dict | None = None,
+) -> dict:
+    task = task or {}
+    upload_name = file_name or Path(file_path).name
+    file_type = rubika_bot_file_type(task, file_path, upload_name)
+
+    request_result = rubika_bot_api("requestSendFile", {"type": file_type})
+    upload_url = request_result.get("upload_url")
+    if not upload_url:
+        raise RubikaBotApiError("requestSendFile did not return upload_url.")
+
+    with open(file_path, "rb") as file:
+        upload_response = requests.post(
+            upload_url,
+            files={"file": (upload_name, file, "application/octet-stream")},
+            timeout=None,
+        )
+    upload_response.raise_for_status()
+
+    upload_result = upload_response.json()
+    upload_data = upload_result.get("data") or {}
+    if upload_result.get("status") not in {None, "OK"}:
+        detail = (
+            upload_result.get("dev_message")
+            or upload_result.get("message")
+            or upload_result.get("status")
+        )
+        raise RubikaBotApiError(f"upload_file failed: {detail}")
+
+    file_id = upload_data.get("file_id")
+    if not file_id:
+        raise RubikaBotApiError("Rubika upload did not return file_id.")
+
+    send_payload = {"chat_id": target, "file_id": file_id}
+    if caption and caption.strip():
+        send_payload["text"] = caption.strip()
+    send_result = rubika_bot_api("sendFile", send_payload)
+
+    file_result = rubika_bot_api("getFile", {"file_id": file_id})
+    download_url = str(file_result.get("download_url") or "").strip()
+    if not download_url:
+        raise RubikaBotApiError("getFile did not return download_url.")
+
+    return {
+        "send_result": send_result,
+        "file_id": file_id,
+        "download_url": download_url,
+    }
 
 
 def is_transient_upload_error(error_text: str) -> bool:
@@ -501,6 +604,7 @@ def send_with_retry(
     )
     task["upload_file_name"] = upload_name
     used_fallback_name = False
+    use_bot_api = bool(RUBIKA_BOT_TOKEN and str(target).lower() not in {"me", "cloud", "self"})
 
     for attempt in range(1, MAX_RETRIES + 1):
         if is_cancelled(task_id):
@@ -514,22 +618,47 @@ def send_with_retry(
         update_telegram_status(
             task,
             stage="🚀 Starting Upload",
-            upload_status="Connecting to Rubika.",
+            upload_status=(
+                "Connecting to Rubika Bot API for a direct download link."
+                if use_bot_api
+                else "Connecting to Rubika."
+            ),
             attempt_text=task["attempt_text"],
         )
 
         try:
-            result = asyncio.run(
-                send_document(
-                    session_name,
+            if use_bot_api:
+                task["upload_percent"] = 5
+                save_processing(task)
+                update_telegram_status(
+                    task,
+                    stage="🚀 Uploading",
+                    upload_status="Uploading through Rubika Bot API.",
+                    attempt_text=task["attempt_text"],
+                )
+                result = upload_file_to_rubika_bot_api(
                     target,
                     file_path,
                     caption,
-                    callback=make_upload_progress_callback(task, attempt),
                     file_name=upload_name,
                     task=task,
                 )
-            )
+                task["rubika_file_id"] = result.get("file_id")
+                task["rubika_download_url"] = result.get("download_url")
+                task["upload_percent"] = 99
+                save_processing(task)
+            else:
+                result = asyncio.run(
+                    send_document(
+                        session_name,
+                        target,
+                        file_path,
+                        caption,
+                        callback=make_upload_progress_callback(task, attempt),
+                        file_name=upload_name,
+                        task=task,
+                    )
+                )
 
             if is_cancelled(task_id):
                 raise CancelledTaskError("Cancelled by user.")
@@ -624,7 +753,7 @@ def process_task(task: dict) -> None:
         task["file_name"] = send_name
         save_processing(task)
 
-        send_with_retry(
+        result = send_with_retry(
             task,
             settings["rubika_session"],
             settings["rubika_target"],
@@ -632,6 +761,20 @@ def process_task(task: dict) -> None:
             caption,
             file_name=send_name,
         )
+        if isinstance(result, dict):
+            if result.get("download_url"):
+                task["rubika_download_url"] = result["download_url"]
+            if result.get("file_id"):
+                task["rubika_file_id"] = result["file_id"]
+        if (
+            not task.get("rubika_download_url")
+            and not RUBIKA_BOT_TOKEN
+            and str(settings["rubika_target"]).lower() not in {"me", "cloud", "self"}
+        ):
+            task["rubika_download_error"] = (
+                "Set RUBIKA_BOT_TOKEN and add that Rubika bot as an admin in the channel "
+                "to receive a direct download_url."
+            )
     except CancelledTaskError:
         cleanup_local_file(str(send_path))
         clear_cancelled(task_id)
