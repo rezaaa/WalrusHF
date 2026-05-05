@@ -10,4 +10,6 @@ venv/
 *.session
 *.session-journal
 run.local.sh
+*.rp
 rubsession.rp
+logs/

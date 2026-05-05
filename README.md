@@ -1,3 +1,14 @@
+---
+title: Walrus
+emoji: ⛵
+colorFrom: blue
+colorTo: gray
+sdk: gradio
+app_file: app.py
+python_version: 3.10
+pinned: false
+---
+
 # Walrus
 
 [فارسی](README.fa.md)
@@ -171,6 +182,31 @@ This starts:
 
 - `telegram_bot.py` - Telegram receiver and downloader
 - `rubika_worker.py` - Rubika upload worker
+
+## Run on Hugging Face Spaces
+
+Create a Space with the Gradio SDK and push this repository to it. The Space runs `app.py`, which starts the Telegram bot and Rubika worker in the background and shows a small status dashboard.
+
+Add these values in Space settings as secrets:
+
+```env
+API_ID=your_telegram_api_id
+API_HASH=your_telegram_api_hash
+BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_SESSION=walrus
+RUBIKA_SESSION=rubsession
+OWNER_TELEGRAM_ID=123456789
+```
+
+`API_ID`, `API_HASH`, and `BOT_TOKEN` are required. `TELEGRAM_SESSION`, `RUBIKA_SESSION`, and `OWNER_TELEGRAM_ID` are optional but recommended.
+
+After the Space starts, open the Gradio page once and confirm the services are running. Then open your Telegram bot and send `/start` to finish Rubika setup.
+
+Notes for Spaces:
+
+- Use Hugging Face secrets instead of committing a `.env` file.
+- The free Space filesystem can reset on rebuilds or restarts, so Rubika session files may need to be recreated.
+- Long transfers depend on the Space staying awake.
 
 ## Bot Controls
 
