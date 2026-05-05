@@ -54,7 +54,6 @@ API_HASH=your_telegram_api_hash
 BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_SESSION=walrus
 RUBIKA_SESSION=rubsession
-RUBIKA_BOT_TOKEN=your_rubika_bot_token
 OWNER_TELEGRAM_ID=123456789
 ```
 
@@ -65,7 +64,6 @@ OWNER_TELEGRAM_ID=123456789
 - `BOT_TOKEN` - از BotFather
 - `TELEGRAM_SESSION` - نام اختیاری سشن Pyrogram؛ مقدار پیش‌فرض `walrus` است
 - `RUBIKA_SESSION` - نام یا مسیر سشنی که `rubpy` استفاده می‌کند
-- `RUBIKA_BOT_TOKEN` - اختیاری است، اما برای گرفتن لینک مستقیم `download_url` بعد از آپلود در کانال لازم است
 - `OWNER_TELEGRAM_ID` - اختیاری؛ اگر تنظیم شود فقط همین کاربر تلگرام می‌تواند از ربات استفاده کند
 
 `TELEGRAM_SESSION` نام فایل سشن تلگرام/Pyrogram را کنترل می‌کند، مثل `walrus.session`.
@@ -215,7 +213,6 @@ python main.py
 - از `⚙️ Settings` وارد `📬 Destination` شوید تا مقصد را تغییر دهید
 - می‌توانید `☁️ Saved Messages` یا `📣 Choose Channel` را انتخاب کنید
 - برای آپلود در کانال، حساب فعال روبیکا باید اجازه‌ی ارسال در آن کانال را داشته باشد
-- لینک دانلود مستقیم نیاز به `RUBIKA_BOT_TOKEN` دارد؛ آن ربات روبیکا را ادمین کانال مقصد کنید تا worker بتواند از Bot API آپلود کند و `getFile` را صدا بزند
 - انتقال‌هایی که قبلا صف شده‌اند، همان مقصد زمان صف شدن را نگه می‌دارند
 
 آپلود از لینک مستقیم:

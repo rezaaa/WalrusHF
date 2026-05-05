@@ -56,7 +56,6 @@ API_HASH=your_telegram_api_hash
 BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_SESSION=walrus
 RUBIKA_SESSION=rubsession
-RUBIKA_BOT_TOKEN=your_rubika_bot_token
 OWNER_TELEGRAM_ID=123456789
 ```
 
@@ -67,7 +66,6 @@ Variables:
 - `BOT_TOKEN` - from BotFather
 - `TELEGRAM_SESSION` - optional Pyrogram session name; defaults to `walrus`
 - `RUBIKA_SESSION` - session name or path used by `rubpy`
-- `RUBIKA_BOT_TOKEN` - optional but required for direct Rubika `download_url` links after channel uploads
 - `OWNER_TELEGRAM_ID` - optional; if set, only this Telegram user ID can use the bot
 
 `TELEGRAM_SESSION` controls the Telegram/Pyrogram session file name, such as `walrus.session`.
@@ -216,7 +214,6 @@ Upload destinations:
 - open `⚙️ Settings` and tap `📬 Destination` to change where future uploads go
 - choose `☁️ Saved Messages` or `📣 Choose Channel`
 - channel uploads require the active Rubika account to have permission to post in that channel
-- direct download links require `RUBIKA_BOT_TOKEN`; add that Rubika bot as an admin in the target channel so the worker can upload through the Bot API and call `getFile`
 - already queued transfers keep the destination they had when they were queued
 
 Direct link uploads:
