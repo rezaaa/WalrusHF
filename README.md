@@ -26,6 +26,9 @@ WalrusHF runs a Telegram bot inside a Hugging Face Space and uploads received fi
 
 ## Install
 
+<img width="1536" height="1024" alt="Generated image 1" src="https://github.com/user-attachments/assets/45187c3e-650a-4435-b9a4-4cd1bf44d4f3" />
+
+
 ### 1. Create A Hugging Face Space
 
 Create a new Space with these settings:
