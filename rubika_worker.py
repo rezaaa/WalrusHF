@@ -123,6 +123,8 @@ def update_telegram_status(
     chat_id = task.get("chat_id")
     status_message_id = task.get("status_message_id")
     if not chat_id or not status_message_id:
+        if task.get("source") == "space_ui":
+            return
         worker_log(
             "cannot update Telegram status: "
             f"missing chat_id/status_message_id for task {task.get('task_id', '-')}"

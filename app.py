@@ -5,15 +5,19 @@ import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from dotenv import load_dotenv
+import requests
 
 from task_store import (
     DATA_DIR,
@@ -22,16 +26,20 @@ from task_store import (
     QUEUE_DIR,
     QUEUE_FILE,
     SESSION_DIR,
+    append_task,
+    apply_runtime_settings,
     clear_worker_pid,
     ensure_storage_dirs,
     human_size,
     is_cancelled,
     load_processing,
     load_runtime_settings,
+    normalize_upload_filename,
     processing_task_is_active,
     queue_size,
     read_failed_entries,
     runtime_path,
+    safe_filename,
 )
 
 
@@ -42,6 +50,25 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_LINES: deque[str] = deque(maxlen=250)
 STATE_LOCK = threading.Lock()
 STOP_EVENT = threading.Event()
+WEB_DOWNLOADS: dict[str, dict] = {}
+WEB_DOWNLOAD_LOCK = threading.Lock()
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"ignoring invalid integer value for {name}: {raw!r}", flush=True)
+        return default
+
+
+DIRECT_URL_TIMEOUT = env_int("WALRUS_DIRECT_URL_TIMEOUT", 30)
+DIRECT_URL_CHUNK_SIZE = 1024 * 512
+MAX_FILE_BYTES = env_int("WALRUS_MAX_FILE_BYTES", 8 * 1024 * 1024 * 1024)
+MIN_FREE_BYTES = env_int("WALRUS_MIN_FREE_BYTES", 512 * 1024 * 1024)
 
 telegram_proc: subprocess.Popen | None = None
 rubika_proc: subprocess.Popen | None = None
@@ -185,12 +212,203 @@ def storage_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
+def clean_old_web_downloads() -> None:
+    cutoff = time.time() - 60 * 60
+    with WEB_DOWNLOAD_LOCK:
+        old_task_ids = [
+            task_id
+            for task_id, item in WEB_DOWNLOADS.items()
+            if item.get("finished_at") and float(item["finished_at"]) < cutoff
+        ]
+        for task_id in old_task_ids:
+            WEB_DOWNLOADS.pop(task_id, None)
+
+
+def web_download_snapshot() -> list[dict]:
+    clean_old_web_downloads()
+    with WEB_DOWNLOAD_LOCK:
+        return [dict(item) for item in WEB_DOWNLOADS.values()]
+
+
+def update_web_download(task_id: str, **updates) -> None:
+    with WEB_DOWNLOAD_LOCK:
+        current = WEB_DOWNLOADS.setdefault(
+            task_id,
+            {
+                "task_id": task_id,
+                "status": "starting",
+                "file_name": "file",
+                "percent": 0,
+                "size": "unknown",
+                "url": "",
+                "note": "",
+            },
+        )
+        current.update(updates)
+
+
+def parse_content_disposition_filename(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r"filename\*=UTF-8''([^;]+)", value, flags=re.IGNORECASE)
+    if match:
+        return unquote(match.group(1).strip().strip('"'))
+    match = re.search(r'filename="([^"]+)"', value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"filename=([^;]+)", value, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip().strip('"')
+    return None
+
+
+def direct_url_filename(url: str, response: requests.Response) -> str:
+    header_name = parse_content_disposition_filename(response.headers.get("content-disposition"))
+    if header_name:
+        return safe_filename(header_name, "download.bin")
+
+    path_name = Path(unquote(urlsplit(url).path)).name
+    return safe_filename(path_name or "download.bin", "download.bin")
+
+
+def unique_download_path(filename: str) -> Path:
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    path = DOWNLOAD_DIR / filename
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    suffix = path.suffix
+    for index in range(1, 1000):
+        candidate = DOWNLOAD_DIR / f"{stem} {index}{suffix}"
+        if not candidate.exists():
+            return candidate
+
+    return DOWNLOAD_DIR / f"{stem} {uuid.uuid4().hex[:8]}{suffix}"
+
+
+def ensure_download_allowed(total_size: int | None) -> None:
+    if total_size and MAX_FILE_BYTES > 0 and total_size > MAX_FILE_BYTES:
+        raise RuntimeError(
+            f"File is too large ({human_size(total_size)}). Limit is {human_size(MAX_FILE_BYTES)}."
+        )
+
+    free_bytes = shutil.disk_usage(DATA_DIR).free
+    required_free = (total_size or 0) + MIN_FREE_BYTES
+    if total_size and free_bytes < required_free:
+        raise RuntimeError(
+            f"Not enough free storage. Need {human_size(required_free)}, have {human_size(free_bytes)}."
+        )
+
+
+def download_url_for_upload(task_id: str, url: str) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"}:
+        update_web_download(
+            task_id,
+            status="failed",
+            note="Only http:// and https:// URLs are supported.",
+            finished_at=time.time(),
+        )
+        return
+
+    started_at = time.time()
+    update_web_download(task_id, status="downloading", url=url, started_at=started_at)
+    append_log("web-url", f"started download id={task_id} url={url}")
+
+    download_path: Path | None = None
+    try:
+        with requests.get(url, stream=True, timeout=DIRECT_URL_TIMEOUT) as response:
+            response.raise_for_status()
+            total_size = int(response.headers.get("content-length") or 0)
+            ensure_download_allowed(total_size or None)
+            filename = normalize_upload_filename(direct_url_filename(url, response), "download.bin")
+            download_path = unique_download_path(filename)
+            downloaded = 0
+
+            update_web_download(
+                task_id,
+                file_name=filename,
+                size=human_size(total_size) if total_size else "unknown",
+                path=str(download_path),
+                percent=0,
+            )
+
+            with download_path.open("wb") as file:
+                for chunk in response.iter_content(chunk_size=DIRECT_URL_CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    file.write(chunk)
+                    downloaded += len(chunk)
+                    if MAX_FILE_BYTES > 0 and downloaded > MAX_FILE_BYTES:
+                        raise RuntimeError(
+                            f"File exceeded limit of {human_size(MAX_FILE_BYTES)}."
+                        )
+                    percent = int((downloaded * 100) / total_size) if total_size else 0
+                    update_web_download(
+                        task_id,
+                        percent=max(0, min(100, percent)),
+                        size=human_size(total_size or downloaded),
+                    )
+
+        file_size = download_path.stat().st_size
+        task = {
+            "task_id": task_id,
+            "type": "local_file",
+            "path": str(download_path),
+            "caption": "",
+            "file_name": normalize_upload_filename(download_path.name, "download.bin"),
+            "file_size": file_size,
+            "media_type": "document",
+            "started_at": started_at,
+            "source": "space_ui",
+            "source_url": url,
+        }
+        apply_runtime_settings(task)
+        append_task(task)
+        update_web_download(
+            task_id,
+            status="queued",
+            percent=100,
+            size=human_size(file_size),
+            note="Queued for Rubika upload.",
+            finished_at=time.time(),
+        )
+        append_log("web-url", f"queued upload id={task_id} file={download_path.name}")
+    except Exception as error:
+        if download_path and download_path.exists():
+            try:
+                download_path.unlink()
+            except OSError:
+                pass
+        update_web_download(
+            task_id,
+            status="failed",
+            note=str(error),
+            finished_at=time.time(),
+        )
+        append_log("web-url", f"failed id={task_id} error={error}")
+
+
+def start_web_url_download(url: str) -> str:
+    task_id = uuid.uuid4().hex[:10]
+    update_web_download(task_id, status="starting", url=url, task_id=task_id)
+    thread = threading.Thread(
+        target=download_url_for_upload,
+        args=(task_id, url),
+        daemon=True,
+    )
+    thread.start()
+    return task_id
+
+
 def dashboard_snapshot() -> dict:
     ensure_supervisor()
     settings = load_runtime_settings()
     processing = load_processing()
     failed_count = len(read_failed_entries()) if FAILED_FILE.exists() else 0
     queue_count = queue_size() if QUEUE_FILE.exists() else 0
+    web_downloads = web_download_snapshot()
 
     upload_percent = 0
     active = "none"
@@ -252,6 +470,7 @@ def dashboard_snapshot() -> dict:
             "runtime_storage": human_size(runtime_storage),
             "upload_percent": upload_percent,
             "stale_processing": stale_processing,
+            "web_downloads": web_downloads,
         },
     }
 
@@ -495,6 +714,95 @@ def render_dashboard() -> bytes:
       gap: 12px;
       margin: 16px 0;
     }}
+    .url-panel {{
+      position: relative;
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(255, 122, 24, 0.08), transparent 44%),
+        var(--panel);
+      box-shadow: 0 12px 42px rgba(0, 0, 0, 0.24);
+      backdrop-filter: blur(12px);
+      overflow: hidden;
+    }}
+    .url-panel::before {{
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.05), transparent 38%),
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 18px);
+    }}
+    .url-panel h2 {{
+      position: relative;
+      padding: 0;
+      border-bottom: 0;
+      background: transparent;
+    }}
+    .url-form {{
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      margin-top: 14px;
+    }}
+    .url-form input {{
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 0 13px;
+      color: var(--text);
+      background: rgba(0, 0, 0, 0.28);
+      font: inherit;
+      outline: none;
+    }}
+    .url-form input:focus {{
+      border-color: rgba(255, 122, 24, 0.7);
+      box-shadow: 0 0 0 3px rgba(255, 122, 24, 0.12);
+    }}
+    .url-form button {{
+      min-height: 44px;
+      border: 1px solid rgba(255, 122, 24, 0.6);
+      border-radius: 8px;
+      padding: 0 16px;
+      color: #14110e;
+      background: var(--accent);
+      font: inherit;
+      font-weight: 820;
+      cursor: pointer;
+    }}
+    .web-downloads {{
+      position: relative;
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }}
+    .web-download {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.18);
+    }}
+    .web-download strong {{
+      display: block;
+      overflow-wrap: anywhere;
+      font-size: 13px;
+      line-height: 1.35;
+    }}
+    .web-download span {{
+      color: var(--muted);
+      font-family: "SF Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 11px;
+      text-transform: uppercase;
+    }}
     .tile, section {{
       border: 1px solid var(--line);
       background: var(--panel);
@@ -663,6 +971,9 @@ def render_dashboard() -> bytes:
       .status-grid, .deck-grid {{
         grid-template-columns: 1fr;
       }}
+      .url-form, .web-download {{
+        grid-template-columns: 1fr;
+      }}
       .row {{
         grid-template-columns: 1fr;
         gap: 4px;
@@ -686,6 +997,15 @@ def render_dashboard() -> bytes:
       </div>
       <span id="live" class="live">Live</span>
     </header>
+
+    <section class="url-panel">
+      <h2>Direct URL Upload</h2>
+      <form class="url-form" method="post" action="/submit-url">
+        <input name="url" type="url" inputmode="url" placeholder="https://example.com/file.mp4" required>
+        <button type="submit">Queue URL</button>
+      </form>
+      <div id="web-downloads" class="web-downloads" aria-live="polite"></div>
+    </section>
 
     <div class="status-grid" aria-label="Service status">
       <article class="tile" id="telegram-card">
@@ -750,6 +1070,7 @@ def render_dashboard() -> bytes:
     const statusEl = document.getElementById("status");
     const logsEl = document.getElementById("logs");
     const liveEl = document.getElementById("live");
+    const webDownloadsEl = document.getElementById("web-downloads");
     const fields = {{
       telegram: document.getElementById("telegram-value"),
       rubika: document.getElementById("rubika-value"),
@@ -783,6 +1104,26 @@ def render_dashboard() -> bytes:
       card.dataset.warn = !goodTest(text) && text !== "0" ? "true" : "false";
     }}
 
+    function renderWebDownloads(downloads) {{
+      if (!webDownloadsEl) return;
+      if (!downloads || downloads.length === 0) {{
+        webDownloadsEl.innerHTML = "";
+        return;
+      }}
+      webDownloadsEl.replaceChildren(...downloads.slice(0, 5).map(item => {{
+        const row = document.createElement("div");
+        row.className = "web-download";
+        const title = document.createElement("strong");
+        title.textContent = item.file_name || item.url || item.task_id || "file";
+        const meta = document.createElement("span");
+        const percent = item.percent ? ` · ${{item.percent}}%` : "";
+        const note = item.note ? ` · ${{item.note}}` : "";
+        meta.textContent = `${{item.status || "pending"}} · ${{item.size || "unknown"}}${{percent}}${{note}}`;
+        row.append(title, meta);
+        return row;
+      }}));
+    }}
+
     async function refreshDashboard() {{
       try {{
         const response = await fetch("/status.json", {{ cache: "no-store" }});
@@ -804,6 +1145,7 @@ def render_dashboard() -> bytes:
         setText(fields.active, metrics.active_upload);
         setText(fields.uploadPercent, `${{metrics.upload_percent || 0}}%`);
         uploadBar.style.width = `${{Math.max(0, Math.min(100, metrics.upload_percent || 0))}}%`;
+        renderWebDownloads(metrics.web_downloads || []);
         updateCardState(cards.telegram, metrics.telegram, value => value.includes("running"));
         updateCardState(cards.rubika, metrics.rubika, value => value.includes("running"));
         updateCardState(cards.queue, metrics.queue, value => Number(value) === 0);
@@ -834,6 +1176,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def redirect_home(self) -> None:
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path == "/health":
@@ -847,6 +1195,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         self.send_body(render_dashboard(), "text/html; charset=utf-8")
+
+    def do_POST(self) -> None:
+        path = urlsplit(self.path).path
+        if path != "/submit-url":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+
+        if length <= 0 or length > 8192:
+            self.redirect_home()
+            return
+
+        body = self.rfile.read(length).decode("utf-8", errors="replace")
+        values = parse_qs(body)
+        url = (values.get("url") or [""])[0].strip()
+        if url:
+            task_id = start_web_url_download(url)
+            append_log("web", f"accepted direct URL task id={task_id}")
+
+        self.redirect_home()
 
     def do_HEAD(self) -> None:
         self.send_response(200)

@@ -22,6 +22,7 @@ The name Walrus is inspired by the Black Sails series: Captain Flint's ship, Wal
 ## Features
 
 - Accept Telegram files and direct `http://` or `https://` file links
+- Queue direct file URLs from the Space dashboard without using Telegram
 - Download files inside the Space runtime
 - Queue Rubika uploads so transfers do not overlap
 - Upload to Rubika Saved Messages or a Rubika channel
@@ -164,6 +165,8 @@ Useful dashboard checks:
 - `Config: ok` means required secrets are present.
 - `Queue` shows waiting upload jobs.
 - `Active upload` shows the current Rubika worker task.
+
+You can also paste a direct `http://` or `https://` file URL into the dashboard. WalrusHF downloads it inside the Space, queues it for Rubika, and tracks the download/upload on the web page. This path is separate from Telegram and does not send Telegram status messages.
 
 ## Troubleshooting
 
