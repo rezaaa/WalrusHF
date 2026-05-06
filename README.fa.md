@@ -6,7 +6,7 @@ WalrusHF یک ربات تلگرام را داخل Hugging Face Space اجرا م
 
 نام Walrus از سریال Black Sails الهام گرفته شده است: کشتی Captain Flint به نام Walrus.
 
-<img width="3456" height="3228" alt="image" src="https://github.com/user-attachments/assets/00199bb8-1882-4ec5-b6cf-b38c8b57d14c" />
+<img width="3456" height="3228" alt="587988794-00199bb8-1882-4ec5-b6cf-b38c8b57d14c" src="https://github.com/user-attachments/assets/274006d1-8de8-4402-83bc-3284cfa50690" />
 
 ## امکانات
 
