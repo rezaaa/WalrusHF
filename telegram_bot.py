@@ -275,24 +275,11 @@ async def ensure_authorized_message(message: Message) -> bool:
         return True
 
     print(
-        "Access denied "
+        "Ignoring unauthorized message "
         f"user_id={user_id} owner_id={OWNER_TELEGRAM_ID} "
         f"text={(message.text or message.caption or '')[:80]!r}",
         flush=True,
     )
-    try:
-        await message.reply_text(
-            "\n".join(
-                [
-                    "⛔️ Access denied.",
-                    f"Your Telegram ID is: <code>{user_id or '-'}</code>",
-                    "Set this value as OWNER_TELEGRAM_ID in the Space secrets, then restart the Space.",
-                ]
-            ),
-            parse_mode=enums.ParseMode.HTML,
-        )
-    except Exception as error:
-        print(f"Failed to send access denied message: {error}", flush=True)
     return False
 
 
@@ -300,8 +287,14 @@ async def ensure_authorized_callback(callback_query: CallbackQuery) -> bool:
     if is_owner(getattr(callback_query.from_user, "id", None)):
         return True
 
+    print(
+        "Ignoring unauthorized callback "
+        f"user_id={getattr(callback_query.from_user, 'id', None)} "
+        f"owner_id={OWNER_TELEGRAM_ID} data={(callback_query.data or '')[:80]!r}",
+        flush=True,
+    )
     try:
-        await callback_query.answer("Access denied.", show_alert=True)
+        await callback_query.answer()
     except Exception:
         pass
     return False
