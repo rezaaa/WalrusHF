@@ -1060,7 +1060,7 @@ def render_dashboard() -> bytes:
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
       gap: 12px;
-      align-items: start;
+      align-items: center;
       padding: 12px;
       border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 8px;
