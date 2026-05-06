@@ -4,6 +4,8 @@
 
 WalrusHF یک ربات تلگرام را داخل Hugging Face Space اجرا می‌کند و فایل‌های دریافتی را در روبیکا آپلود می‌کند. تلگرام پنل اصلی کنترل است؛ صفحه Space فقط داشبورد زنده برای وضعیت پردازش‌ها، صف، ذخیره‌سازی و لاگ‌هاست.
 
+نام Walrus از سریال Black Sails الهام گرفته شده است: کشتی Captain Flint به نام Walrus.
+
 <img width="3456" height="3228" alt="image" src="https://github.com/user-attachments/assets/00199bb8-1882-4ec5-b6cf-b38c8b57d14c" />
 
 ## امکانات

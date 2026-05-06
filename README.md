@@ -1,8 +1,8 @@
 ---
 title: WalrusHF
 emoji: ⛵
-colorFrom: blue
-colorTo: green
+colorFrom: gray
+colorTo: orange
 sdk: gradio
 python_version: '3.11'
 app_file: app.py
@@ -14,6 +14,8 @@ pinned: false
 [فارسی](README.fa.md)
 
 WalrusHF runs a Telegram bot inside a Hugging Face Space and uploads received files to Rubika. Telegram is the control panel; the Space page is a live dashboard for process health, queue state, storage, and logs.
+
+The name Walrus is inspired by the Black Sails series: Captain Flint's ship, Walrus.
 
 <img width="3456" height="3228" alt="image" src="https://github.com/user-attachments/assets/00199bb8-1882-4ec5-b6cf-b38c8b57d14c" />
 
