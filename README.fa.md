@@ -4,6 +4,8 @@
 
 WalrusHF یک ربات تلگرام را داخل Hugging Face Space اجرا می‌کند و فایل‌های دریافتی را در روبیکا آپلود می‌کند. تلگرام پنل اصلی کنترل است؛ صفحه Space فقط داشبورد زنده برای وضعیت پردازش‌ها، صف، ذخیره‌سازی و لاگ‌هاست.
 
+<img width="3456" height="3228" alt="image" src="https://github.com/user-attachments/assets/00199bb8-1882-4ec5-b6cf-b38c8b57d14c" />
+
 ## امکانات
 
 - دریافت فایل از تلگرام و لینک مستقیم `http://` یا `https://`
@@ -14,6 +16,8 @@ WalrusHF یک ربات تلگرام را داخل Hugging Face Space اجرا م
 - پشتیبانی از لغو، پاک‌سازی، تلاش مجدد، تلاش مجدد همه فایل‌ها و ورود به روبیکا
 
 ## نصب
+
+<img width="1536" height="1024" alt="Generated image 1" src="https://github.com/user-attachments/assets/45187c3e-650a-4435-b9a4-4cd1bf44d4f3" />
 
 ### 1. ساخت Hugging Face Space
 
