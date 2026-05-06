@@ -15,6 +15,8 @@ pinned: false
 
 WalrusHF runs a Telegram bot inside a Hugging Face Space and uploads received files to Rubika. Telegram is the control panel; the Space page is a live dashboard for process health, queue state, storage, and logs.
 
+For the VPS-hosted version of Walrus, see https://github.com/rezaaa/walrus.
+
 The name Walrus is inspired by the Black Sails series: Captain Flint's ship, Walrus.
 
 <img width="3456" height="3228" alt="587988794-00199bb8-1882-4ec5-b6cf-b38c8b57d14c" src="https://github.com/user-attachments/assets/82472063-baaf-4bfb-bbc6-34b458fbba2a" />
