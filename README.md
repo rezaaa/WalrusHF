@@ -36,7 +36,7 @@ The name Walrus is inspired by the Black Sails series: Captain Flint's ship, Wal
 
 ### 1. Create A Hugging Face Space
 
-Create a new Space with these settings:
+Open https://huggingface.co/spaces and create a new Space with these settings:
 
 - **Space SDK:** `Gradio`
 - **Gradio template:** `Blank`
@@ -168,6 +168,14 @@ Useful dashboard checks:
 - `Active upload` shows the current Rubika worker task.
 
 You can also paste a direct `http://` or `https://` file URL into the dashboard. WalrusHF downloads it inside the Space, queues it for Rubika, and tracks download/upload progress on the web page. Dashboard URL transfers can be cancelled from the web page, and completed/failed/cancelled items can be cleared with **Clear Done**. This path is separate from Telegram and does not send Telegram status messages.
+
+## Optional Telegram YouTube Downloader Bot
+
+If you want to turn YouTube video links into Telegram files before sending them to WalrusHF, this third-party bot may be useful:
+
+- [@allsaverbot](https://t.me/allsaverbot) - converts YouTube video links into downloadable Telegram files
+
+This bot is not part of WalrusHF and may change, stop working, or apply its own limits. Use it only for content you have permission to download and share.
 
 ## Troubleshooting
 
