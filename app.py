@@ -570,6 +570,7 @@ def cancel_web_task(task_id: str) -> bool:
 
 
 def clear_web_tasks() -> int:
+    web_download_snapshot()
     with WEB_DOWNLOAD_LOCK:
         removable = [
             task_id
@@ -578,8 +579,7 @@ def clear_web_tasks() -> int:
         ]
         for task_id in removable:
             WEB_DOWNLOADS.pop(task_id, None)
-    if removable:
-        append_log("web-url", f"cleared {len(removable)} web transfer item(s)")
+    append_log("web-url", f"cleared {len(removable)} web transfer item(s)")
     return len(removable)
 
 
