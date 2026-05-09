@@ -83,6 +83,12 @@ git push --force-with-lease space main:main
 
 Hugging Face runs [app.py](app.py). It starts the Telegram bot, the Rubika upload worker, and the dashboard on port `7860`.
 
+## Hugging Face Free Plan Sleep
+
+On the free `CPU Basic` hardware, Hugging Face Spaces automatically go to sleep after 48 hours of inactivity. A new visit to the Space wakes it up again, but the bot and workers are not running while the Space is asleep.
+
+Custom sleep times, including never sleeping, are only available after upgrading the Space to paid hardware. See Hugging Face's [Spaces GPU and sleep time settings](https://huggingface.co/docs/hub/spaces-gpus#set-a-custom-sleep-time) docs for the current behavior.
+
 ## Required Secrets
 
 Add these in **Space settings -> Variables and secrets -> Secrets**:

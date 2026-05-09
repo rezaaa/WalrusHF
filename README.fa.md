@@ -71,6 +71,12 @@ git push --force-with-lease space main:main
 
 Hugging Face فایل [app.py](app.py) را اجرا می‌کند. این فایل ربات تلگرام، worker آپلود روبیکا و داشبورد روی پورت `7860` را بالا می‌آورد.
 
+## Sleep در پلن رایگان Hugging Face
+
+روی سخت‌افزار رایگان `CPU Basic`، Hugging Face Spaces بعد از 48 ساعت بی‌استفاده بودن به صورت خودکار sleep می‌شوند. با باز شدن دوباره صفحه Space، برنامه دوباره wake می‌شود، اما وقتی Space در حالت sleep است ربات و workerها اجرا نمی‌شوند.
+
+تنظیم sleep time دلخواه، از جمله همیشه روشن ماندن، فقط بعد از ارتقای Space به سخت‌افزار پولی در دسترس است. برای رفتار فعلی Hugging Face، مستندات [Spaces GPU and sleep time settings](https://huggingface.co/docs/hub/spaces-gpus#set-a-custom-sleep-time) را ببینید.
+
 ## Secretهای لازم
 
 این مقدارها را در **Space settings -> Variables and secrets -> Secrets** اضافه کنید:
